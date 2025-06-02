@@ -108,13 +108,27 @@ def process_invoice():
         print("Request content type:", request.content_type)
         print("Request data size:", request.content_length)
         
-        # For now, since we're having issues with file uploads, let's create a minimal successful response
-        # This will help us verify the connection is working
+        # Create a placeholder file for testing
+        placeholder_filename = "placeholder_result.txt"
+        placeholder_path = os.path.join(app.config['PROCESSED_FOLDER'], placeholder_filename)
+        
+        # Create the placeholder file if it doesn't exist
+        if not os.path.exists(placeholder_path):
+            with open(placeholder_path, 'w') as f:
+                f.write("This is a placeholder result file for testing.\n")
+                f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+                f.write(f"Request content type: {request.content_type}\n")
+                f.write(f"Received form data: {list(request.form.keys())}\n")
+        
+        # Return a response format that matches what the frontend expects
         return jsonify({
             'status': 'success',
             'message': 'Backend connection successful',
             'received_form_data': list(request.form.keys()),
-            'download_url': '/api/download-file/placeholder_result.txt'
+            'file_info': {
+                'path': placeholder_path,
+                'download_url': f'/api/download-file/{placeholder_filename}'
+            }
         })
         
         # Original validation code (commented out for now)
