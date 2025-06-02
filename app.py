@@ -1,7 +1,7 @@
 from flask import Flask, jsonify
 from datetime import datetime
 
-# Create a simple Flask app
+# Create a simple Flask app - the variable name is critical for Render.com
 app = Flask(__name__)
 
 @app.route('/api/health', methods=['GET'])
