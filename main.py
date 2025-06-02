@@ -4,9 +4,9 @@ import sys
 import traceback
 from datetime import datetime
 from werkzeug.utils import secure_filename
-# Removing problematic imports for initial deployment
-# import pandas as pd
-# import PyPDF2
+# Re-enabling pandas for Excel output
+import pandas as pd
+# import PyPDF2 - still keeping this commented out for now
 from flask_cors import CORS
 # import anthropic
 import json
@@ -108,17 +108,24 @@ def process_invoice():
         print("Request content type:", request.content_type)
         print("Request data size:", request.content_length)
         
-        # Create a placeholder file for testing
-        placeholder_filename = "placeholder_result.txt"
+        # Create a placeholder Excel file for testing
+        placeholder_filename = "placeholder_result.xlsx"
         placeholder_path = os.path.join(app.config['PROCESSED_FOLDER'], placeholder_filename)
         
-        # Create the placeholder file if it doesn't exist
-        if not os.path.exists(placeholder_path):
-            with open(placeholder_path, 'w') as f:
-                f.write("This is a placeholder result file for testing.\n")
-                f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-                f.write(f"Request content type: {request.content_type}\n")
-                f.write(f"Received form data: {list(request.form.keys())}\n")
+        # Create a pandas DataFrame with placeholder data
+        data = {
+            'Timestamp': [datetime.now().isoformat()],
+            'Request Content Type': [request.content_type],
+            'Received Form Data': [', '.join(list(request.form.keys()))],
+            'Invoice File': [request.form.get('invoiceFile', '')],
+            'Chart of Accounts File': [request.form.get('coaFile', '')],
+            'Sheet Name': [request.form.get('sheetName', '')],
+            'Status': ['Placeholder - Actual processing will be implemented later']
+        }
+        
+        # Create DataFrame and save as Excel
+        df = pd.DataFrame(data)
+        df.to_excel(placeholder_path, index=False)
         
         # Return a response format that matches what the frontend expects
         return jsonify({
@@ -127,7 +134,9 @@ def process_invoice():
             'received_form_data': list(request.form.keys()),
             'file_info': {
                 'path': placeholder_path,
-                'download_url': f'/api/download-file/{placeholder_filename}'
+                'download_url': f'/api/download-file/{placeholder_filename}',
+                'filename': placeholder_filename,
+                'file_type': 'excel'
             }
         })
         
