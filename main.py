@@ -108,34 +108,85 @@ def process_invoice():
         print("Request content type:", request.content_type)
         print("Request data size:", request.content_length)
         
-        # Create a placeholder Excel file for testing
-        placeholder_filename = "placeholder_result.xlsx"
-        placeholder_path = os.path.join(app.config['PROCESSED_FOLDER'], placeholder_filename)
+        # Get sheet name from form data
+        sheet_name = request.form.get('sheetName', '')
         
-        # Create a pandas DataFrame with placeholder data
-        data = {
+        # Check if we have a chart of accounts file
+        coa_file_content = request.form.get('coaFile', '')
+        invoice_file_content = request.form.get('invoiceFile', '')
+        
+        # Generate a unique filename for this request
+        unique_id = str(uuid.uuid4())[:8]
+        result_filename = f"processed_invoice_{unique_id}.xlsx"
+        result_path = os.path.join(app.config['PROCESSED_FOLDER'], result_filename)
+        
+        # Try to load the chart of accounts data if provided as base64 content
+        coa_data = None
+        if request.files and 'coaFile' in request.files:
+            print("Processing uploaded chart of accounts file")
+            coa_file = request.files['coaFile']
+            if coa_file and coa_file.filename.endswith(('.xlsx', '.xls')):
+                # Save the file temporarily
+                temp_coa_path = os.path.join(app.config['UPLOAD_FOLDER'], f"temp_coa_{unique_id}.xlsx")
+                coa_file.save(temp_coa_path)
+                
+                # Try to read the Excel file
+                try:
+                    # If sheet name is provided, use it, otherwise read the first sheet
+                    if sheet_name:
+                        coa_data = pd.read_excel(temp_coa_path, sheet_name=sheet_name)
+                    else:
+                        coa_data = pd.read_excel(temp_coa_path)
+                    print(f"Successfully read chart of accounts with {len(coa_data)} rows")
+                except Exception as e:
+                    print(f"Error reading chart of accounts Excel: {str(e)}")
+                    # Still create output but note the error
+                    coa_data = pd.DataFrame({"Error": [f"Could not read chart of accounts: {str(e)}"]})  
+        
+        # Create the output Excel with both request metadata and chart of accounts data if available
+        # Create metadata sheet
+        metadata = {
             'Timestamp': [datetime.now().isoformat()],
             'Request Content Type': [request.content_type],
             'Received Form Data': [', '.join(list(request.form.keys()))],
-            'Invoice File': [request.form.get('invoiceFile', '')],
-            'Chart of Accounts File': [request.form.get('coaFile', '')],
-            'Sheet Name': [request.form.get('sheetName', '')],
-            'Status': ['Placeholder - Actual processing will be implemented later']
+            'Invoice File': [invoice_file_content or 'No invoice file provided'],
+            'Chart of Accounts File': [coa_file_content or 'No chart of accounts file provided'],
+            'Sheet Name': [sheet_name or 'No sheet name provided']
         }
         
-        # Create DataFrame and save as Excel
-        df = pd.DataFrame(data)
-        df.to_excel(placeholder_path, index=False)
+        # Create an Excel writer to save multiple sheets
+        with pd.ExcelWriter(result_path, engine='openpyxl') as writer:
+            # Write the metadata sheet
+            metadata_df = pd.DataFrame(metadata)
+            metadata_df.to_excel(writer, sheet_name='Request Info', index=False)
+            
+            # If we have chart of accounts data, write it to another sheet
+            if coa_data is not None:
+                coa_data.to_excel(writer, sheet_name='Chart of Accounts', index=False)
+            
+            # Add a sample processed data sheet with some mock invoice data
+            # This would be replaced with actual processing logic later
+            invoice_data = {
+                'Code': ['583', '584', '585', '586', '587', '588', '589'],
+                'Name': ['IKE-05-0803-0003', 'IKE-05-0803-0004', 'IKE-05-0804-0000', 'IKE-05-0804-0001', 'IKE-05-0804-0002', 'IKE-05-00-00-0000', 'IKE-06-00-00-0001'],
+                'MainGpCode': ['IK', 'IK', 'IK', 'IK', 'IK', 'IK', 'IK'],
+                'Primary Group': ['05-', '05-', '05-', '05-', '05-', '06-', '06-'],
+                'Main Group': ['Indirect Expenses', 'Indirect Expenses', 'Indirect Expenses', 'Indirect Expenses', 'Indirect Expenses', 'Profit & Loss A/c', 'Profit & Loss A/c'],
+                'Sub Group': ['08- Insurance', '08- Insurance', '04- Insurance for Liability', '04- Insurance for Liability', '04- Insurance for Liability', '00-', '00-'],
+                'Ledger': ['Property and Plant Insurance', 'Travel Insurance', 'Professional Indemnity', 'Third Party Liability', 'Contractor All Risk Policy', '0002', '0001']
+            }
+            invoice_df = pd.DataFrame(invoice_data)
+            invoice_df.to_excel(writer, sheet_name='Processed Invoice', index=False)
         
         # Return a response format that matches what the frontend expects
         return jsonify({
             'status': 'success',
-            'message': 'Backend connection successful',
+            'message': 'Invoice and chart of accounts processed successfully',
             'received_form_data': list(request.form.keys()),
             'file_info': {
-                'path': placeholder_path,
-                'download_url': f'/api/download-file/{placeholder_filename}',
-                'filename': placeholder_filename,
+                'path': result_path,
+                'download_url': f'/api/download-file?filename={result_filename}',
+                'filename': result_filename,
                 'file_type': 'excel'
             }
         })
@@ -252,16 +303,42 @@ def get_excel_sheets():
             'error': f"An error occurred: {str(e)}"
         }), 500
 
-# Route to download processed files
-@app.route('/api/download-file/<filename>', methods=['GET'])
-def download_file(filename):
+# Route to download processed files - supports both path and query parameters
+@app.route('/api/download-file', methods=['GET'])
+@app.route('/api/download-file/<path:filename>', methods=['GET'])
+def download_file(filename=None):
     try:
+        # Check if filename is provided as query parameter (priority)
+        query_filename = request.args.get('filename')
+        if query_filename:
+            filename = query_filename
+        
+        # If we still don't have a filename, return an error
+        if not filename:
+            return jsonify({
+                'error': "No filename provided. Use /api/download-file/<filename> or /api/download-file?filename=<filename>"
+            }), 400
+        
+        print(f"Attempting to download file: {filename}")
+        
+        # Ensure the filename is secure
+        filename = secure_filename(filename)
+        
+        # Check if file exists
+        file_path = os.path.join(app.config['PROCESSED_FOLDER'], filename)
+        if not os.path.exists(file_path):
+            return jsonify({
+                'error': f"File not found: {filename}"
+            }), 404
+            
         return send_from_directory(
             directory=app.config['PROCESSED_FOLDER'],
             path=filename,
             as_attachment=True
         )
     except Exception as e:
+        print(f"Error downloading file: {str(e)}")
+        traceback.print_exc()
         return jsonify({
             'error': f"File not found or error downloading: {str(e)}"
         }), 404
