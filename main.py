@@ -241,6 +241,19 @@ application = app
 @app.route('/api/process-invoice', methods=['POST'])
 def process_invoice():
     try:
+        # Debug log request data
+        print("\n=== New Request ===")
+        print("Request headers:", request.headers)
+        print("Request form data:", request.form)
+        print("Request files:", request.files)
+        print("Content type:", request.content_type)
+        
+        # Check if files are present in the request for debugging
+        print("Received request files:", list(request.files.keys()))
+        print("Received form data:", list(request.form.keys()))
+        print("Request content type:", request.content_type)
+        print("Request data size:", request.content_length)
+        
         # Log detailed information about the request for debugging
         print("Received request files:", list(request.files.keys()))
         print("Received form data:", list(request.form.keys()))
@@ -300,13 +313,17 @@ def process_invoice():
             metadata_df.to_excel(writer, sheet_name='Request Info', index=False)
         # Check if files are present in the request
         if 'invoiceFile' not in request.files or 'coaFile' not in request.files:
+            print("Missing files in request. Available files:", request.files.keys())  # Debug log
             return jsonify({
-                'error': 'Both invoice and chart of accounts files are required'
+                'error': 'Both invoice and chart of accounts files are required',
+                'available_files': list(request.files.keys())  # Include available files in error for debugging
             }), 400
             
         # Get files from the request
         invoice_file = request.files['invoiceFile']
         chart_file = request.files['coaFile']
+        
+        print(f"Processing files - Invoice: {invoice_file.filename}, COA: {chart_file.filename}")  # Debug log
         sheet_name = request.form.get('sheetName', '')  # Optional sheet name from frontend
         
         # Check if files are selected
