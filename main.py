@@ -334,21 +334,22 @@ def process_files(invoice_path, chart_path, sheet_name, unique_id):
         if not invoice_text:
             raise ValueError("Could not extract text from invoice PDF")
 
-        # 2. Read the Chart of Accounts data first
-        coa_sheet = pd.read_excel(chart_path, sheet_name=sheet_name)
-        
-        # 3. Analyze the Chart of Accounts Excel structure
-        excel_structure = analyze_excel_structure(chart_path, sheet_name)
-        if not excel_structure:
+        # 2. Analyze the Chart of Accounts Excel structure and get the sheet data
+        coa_sheet, excel_structure = analyze_excel_structure(chart_path, sheet_name)
+        if not excel_structure or not coa_sheet:
             raise ValueError("Could not analyze Chart of Accounts structure")
             
-        # Ensure excel_structure has the expected format
-        if isinstance(excel_structure, tuple):
-            # If it's a tuple, convert to the expected dictionary format
-            excel_structure = {
-                'columns': list(coa_sheet.columns),
-                'data_types': {col: str(coa_sheet[col].dtype) for col in coa_sheet.columns}
-            }
+        # Ensure excel_structure has all required keys
+        if 'patterns' not in excel_structure:
+            excel_structure['patterns'] = {}
+        if 'hierarchy' not in excel_structure:
+            excel_structure['hierarchy'] = {}
+        if 'relationships' not in excel_structure:
+            excel_structure['relationships'] = {}
+            
+        # Add data types if not present
+        if 'data_types' not in excel_structure:
+            excel_structure['data_types'] = {col: str(coa_sheet[col].dtype) for col in coa_sheet.columns}
         
         # 4. Use Claude to classify invoice and match to Chart of Accounts
         api_key = os.getenv('ANTHROPIC_API_KEY')
