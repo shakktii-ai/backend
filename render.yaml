@@ -3,7 +3,7 @@ services:
     name: invoice-processor-api
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn main:app
+    startCommand: gunicorn main:app --worker-class=gthread --workers=2 --threads=4 --worker-tmp-dir /dev/shm
     envVars:
       - key: ANTHROPIC_API_KEY
         sync: false
@@ -15,17 +15,15 @@ services:
         value: "1"
       - key: PYTHONDONTWRITEBYTECODE
         value: "1"
+      - key: PORT
+        value: 10000
+      - key: UPLOAD_FOLDER
+        value: /opt/render/project/src/uploads
+      - key: PROCESSED_FOLDER
+        value: /opt/render/project/src/processed
+      - key: TEMP_FOLDER
+        value: /opt/render/project/src/temp
     plan: free
     autoDeploy: true
     region: singapore
     healthCheckPath: /health
-    envVars:
-      - key: PORT
-        value: 10000
-        value: app.main
-      - key: UPLOAD_FOLDER
-        value: uploads
-      - key: TEMP_FOLDER
-        value: temp
-      - key: PROCESSED_FOLDER
-        value: processed

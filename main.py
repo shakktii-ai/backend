@@ -13,7 +13,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.dataframe import dataframe_to_rows
 import PyPDF2
-import anthropic
+from anthropic import Anthropic
 import json
 import re
 from perfect4 import (
@@ -25,7 +25,7 @@ from perfect4 import (
 )
 
 # Initialize Anthropic client
-anthropic = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+anthropic_client = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
 
 # Helper function to analyze chart of accounts with Claude
 def analyze_coa_with_claude(coa_data):
@@ -146,9 +146,18 @@ Provide your analysis in this JSON format:
 # Load environment variables from .env file if it exists
 load_dotenv()
 
+# Get base directory for file storage
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Define folder paths
+UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER', os.path.join(BASE_DIR, 'uploads'))
+PROCESSED_FOLDER = os.environ.get('PROCESSED_FOLDER', os.path.join(BASE_DIR, 'processed'))
+TEMP_FOLDER = os.environ.get('TEMP_FOLDER', os.path.join(BASE_DIR, 'temp'))
+
 # Create required folders immediately
-for folder in ['uploads', 'temp', 'processed']:
+for folder in [UPLOAD_FOLDER, TEMP_FOLDER, PROCESSED_FOLDER]:
     os.makedirs(folder, exist_ok=True)
+    print(f"Created directory: {folder}")
 
 # Create the Flask application
 app = Flask(__name__)
@@ -157,9 +166,9 @@ app = Flask(__name__)
 CORS(app)
 
 # Configure file upload settings
-app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['TEMP_FOLDER'] = 'temp'
-app.config['PROCESSED_FOLDER'] = 'processed'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['PROCESSED_FOLDER'] = PROCESSED_FOLDER
+app.config['TEMP_FOLDER'] = TEMP_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload
 
 # In Flask 2.3+, before_first_request is removed
@@ -557,4 +566,6 @@ def download_file(filename=None):
         }), 404
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0')
+    # Get port from environment variable or use default 10000
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, debug=os.environ.get('FLASK_ENV') == 'development')
