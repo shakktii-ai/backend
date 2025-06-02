@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: invoice-processor-api
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app.main:app
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: FLASK_ENV
+        value: production
+      - key: FLASK_APP
+        value: app.main
+      - key: UPLOAD_FOLDER
+        value: uploads
+      - key: TEMP_FOLDER
+        value: temp
+      - key: PROCESSED_FOLDER
+        value: processed

@@ -1,0 +1,6 @@
+streamlit==1.31.0
+pandas==2.0.3
+PyPDF2==3.0.1
+anthropic==0.52.1
+python-dotenv==1.0.0
+Werkzeug==2.3.7
