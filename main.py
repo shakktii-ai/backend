@@ -2,8 +2,21 @@ from flask import Flask, jsonify, request, send_from_directory
 import os
 from datetime import datetime
 
+# Create required folders immediately
+for folder in ['uploads', 'temp', 'processed']:
+    os.makedirs(folder, exist_ok=True)
+
 # Create the Flask application
 app = Flask(__name__)
+
+# In Flask 2.3+, before_first_request is removed
+# Instead, we'll create a function that runs with the first request
+@app.before_request
+def initialize_app():
+    # Only run once using an app variable to track initialization
+    if not getattr(app, 'initialized', False):
+        app.initialized = True
+        # Any additional initialization can go here
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -58,12 +71,6 @@ def index():
         </body>
     </html>
     """
-
-# Create required folders on startup
-@app.before_first_request
-def create_folders():
-    for folder in ['uploads', 'temp', 'processed']:
-        os.makedirs(folder, exist_ok=True)
 
 # This is what Render.com needs - app must be importable from this file
 application = app
