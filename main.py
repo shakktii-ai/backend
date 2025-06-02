@@ -283,53 +283,11 @@ def process_invoice():
             
             print(f"Saved uploaded files - Invoice: {invoice_path}, COA: {chart_path}")
             
-        # Check if we have file paths in form data
-        elif 'invoiceFile' in request.form and 'coaFile' in request.form:
-            # Handle file paths from form data
-            invoice_filepath = request.form['invoiceFile']
-            chart_filepath = request.form['coaFile']
-            
-            # Secure the filenames
-            invoice_filename = secure_filename(os.path.basename(invoice_filepath))
-            chart_filename = secure_filename(os.path.basename(chart_filepath))
-            
-            # Create destination paths
-            invoice_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{unique_id}_{invoice_filename}")
-            chart_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{unique_id}_{chart_filename}")
-            
-            # Create upload directory if it doesn't exist
-            os.makedirs(os.path.dirname(invoice_path), exist_ok=True)
-            
-            # Function to download a file from URL
-            def download_file(url, destination):
-                response = requests.get(url, stream=True)
-                response.raise_for_status()
-                with open(destination, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-            
-            try:
-                # For local file paths (development)
-                if os.path.exists(invoice_filepath) and os.path.exists(chart_filepath):
-                    import shutil
-                    shutil.copy2(invoice_filepath, invoice_path)
-                    shutil.copy2(chart_filepath, chart_path)
-                else:
-                    # Try to download if files are URLs (production)
-                    download_file(invoice_filepath, invoice_path)
-                    download_file(chart_filepath, chart_path)
-                    
-                print(f"Downloaded and saved files - Invoice: {invoice_path}, COA: {chart_path}")
-                
-            except Exception as e:
-                error_msg = f"Error processing file paths: {str(e)}"
-                print(error_msg)
-                return jsonify({'error': error_msg}), 400
-                
         else:
             return jsonify({
                 'error': 'Both invoice and chart of accounts files are required',
-                'available_fields': list(request.form.keys()) + list(request.files.keys())
+                'hint': 'Please upload files using multipart/form-data',
+                'available_fields': list(request.files.keys())
             }), 400
             
         # Process the files using perfect4.py logic
