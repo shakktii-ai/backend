@@ -298,106 +298,74 @@ def process_invoice():
             # Write the metadata sheet
             metadata_df = pd.DataFrame(metadata)
             metadata_df.to_excel(writer, sheet_name='Request Info', index=False)
+        # Check if files are present in the request
+        if 'invoiceFile' not in request.files or 'coaFile' not in request.files:
+            return jsonify({
+                'error': 'Both invoice and chart of accounts files are required'
+            }), 400
             
-            # If we have chart of accounts data, write it to another sheet
-            if coa_data is not None:
-                coa_data.to_excel(writer, sheet_name='Chart of Accounts', index=False)
-            
-            # Extract invoice text and process with perfect4.py
-            invoice_text = extract_invoice_data(invoice_path)
-            if not invoice_text:
-                raise ValueError("Could not extract text from invoice PDF")
-
-            # Analyze Chart of Accounts structure
-            excel_structure = analyze_excel_structure(chart_path, sheet_name)
-            if not excel_structure:
-                raise ValueError("Could not analyze Chart of Accounts structure")
-
-            # Get Claude API key
-            api_key = os.getenv('ANTHROPIC_API_KEY')
-            if not api_key:
-                raise ValueError("ANTHROPIC_API_KEY not found in environment variables")
-
-            # Process invoice with Claude
-            invoice_data = classify_invoice_with_claude(invoice_text, coa_sheet, excel_structure, api_key)
-            if not invoice_data or 'error' in invoice_data:
-                raise ValueError(f"Claude classification failed: {invoice_data.get('error', 'Unknown error')}")
-
-            # Create processed invoice DataFrame
-            processed_data = []
-            for entry in invoice_data.get('entries', []):
-                processed_data.append({
-                    'Date': entry.get('date', ''),
-                    'Description': entry.get('description', ''),
-                    'Amount': entry.get('amount', ''),
-                    'Account Code': entry.get('account_code', ''),
-                    'Account Name': entry.get('account_name', ''),
-                    'Classification': entry.get('classification', '')
-                })
-            invoice_df = pd.DataFrame(processed_data)
-            invoice_df.to_excel(writer, sheet_name='Processed Invoice', index=False)
+        # Get files from the request
+        invoice_file = request.files['invoiceFile']
+        chart_file = request.files['coaFile']
+        sheet_name = request.form.get('sheetName', '')  # Optional sheet name from frontend
         
-        # Return a response format that matches what the frontend expects
-        return jsonify({
-            'status': 'success',
-            'message': 'Invoice and chart of accounts processed successfully',
-            'received_form_data': list(request.form.keys()),
-            'file_info': {
-                'path': result_path,
-                'download_url': f'/api/download-file?filename={result_filename}',
-                'filename': result_filename,
-                'file_type': 'excel'
-            }
-        })
-        
-        # Original validation code (commented out for now)
-        # if ('invoiceFile' not in request.files and 'invoice' not in request.files) or \
-        #    ('coaFile' not in request.files and 'chart_of_accounts' not in request.files):
-        #     return jsonify({
-        #         'error': 'Both invoice and chart of accounts files are required'
-        #     }), 400
-        
-        # Get files using frontend field names or fallback to backend names
-        invoice_file = request.files.get('invoiceFile') or request.files.get('invoice')
-        chart_file = request.files.get('coaFile') or request.files.get('chart_of_accounts')
-        sheet_name = request.form.get('sheetName', '')  # Optional sheet name - from frontend
-        
-        # Check if filenames are valid
+        # Check if files are selected
         if invoice_file.filename == '' or chart_file.filename == '':
             return jsonify({'error': 'No file selected'}), 400
         
-        # Secure the filenames
-        invoice_filename = secure_filename(invoice_file.filename)
-        chart_filename = secure_filename(chart_file.filename)
-        
-        # Generate unique filenames to prevent overwriting
-        unique_id = str(uuid.uuid4())
-        invoice_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{unique_id}_{invoice_filename}")
-        chart_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{unique_id}_{chart_filename}")
-        
-        # Save the uploaded files
-        invoice_file.save(invoice_path)
-        chart_file.save(chart_path)
-        
-        # Process the invoice using perfect4.py logic
-        result = process_files(invoice_path, chart_path, sheet_name, unique_id)
-        
-        if result.get('status') == 'success':
-            return jsonify({
-                'status': 'success',
-                'message': 'Invoice and chart of accounts processed successfully',
-                'file_info': {
-                    'path': result['output_path'],
-                    'filename': result['filename'],
-                    'download_url': f'/api/download-file?filename={result["filename"]}',
-                    'file_type': 'excel'
-                },
-                'received_form_data': list(request.form.keys())
-            })
-        else:
-            return jsonify({
-                'error': result.get('message', 'Failed to process invoice')
-            }), 500
+        try:
+            # Generate unique filenames to prevent overwriting
+            unique_id = str(uuid.uuid4())
+            
+            # Secure the filenames
+            invoice_filename = secure_filename(invoice_file.filename)
+            chart_filename = secure_filename(chart_file.filename)
+            
+            # Create file paths
+            invoice_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{unique_id}_{invoice_filename}")
+            chart_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{unique_id}_{chart_filename}")
+            
+            # Save the uploaded files
+            invoice_file.save(invoice_path)
+            chart_file.save(chart_path)
+            
+            # Process the files using perfect4.py logic
+            result = process_files(invoice_path, chart_path, sheet_name, unique_id)
+            
+            if result.get('status') == 'success':
+                return jsonify({
+                    'status': 'success',
+                    'message': 'Invoice and chart of accounts processed successfully',
+                    'file_info': {
+                        'path': result['output_path'],
+                        'filename': result['filename'],
+                        'download_url': f'/api/download-file?filename={result["filename"]}',
+                        'file_type': 'excel'
+                    },
+                    'received_form_data': list(request.form.keys())
+                })
+            else:
+                # Clean up uploaded files if processing failed
+                if os.path.exists(invoice_path):
+                    os.remove(invoice_path)
+                if os.path.exists(chart_path):
+                    os.remove(chart_path)
+                    
+                return jsonify({
+                    'error': result.get('message', 'Failed to process invoice')
+                }), 500
+                
+        except Exception as e:
+            # Clean up any partially uploaded files if an error occurs
+            if 'invoice_path' in locals() and os.path.exists(invoice_path):
+                os.remove(invoice_path)
+            if 'chart_path' in locals() and os.path.exists(chart_path):
+                os.remove(chart_path)
+                
+            error_message = f"Error processing request: {str(e)}"
+            print(error_message)
+            traceback.print_exc()
+            return jsonify({'error': error_message}), 500
             
     except Exception as e:
         print(f"Error processing invoice: {str(e)}")
