@@ -4,10 +4,11 @@ import sys
 import traceback
 from datetime import datetime
 from werkzeug.utils import secure_filename
-import pandas as pd
-import PyPDF2
+# Removing problematic imports for initial deployment
+# import pandas as pd
+# import PyPDF2
 from flask_cors import CORS
-import anthropic
+# import anthropic
 import json
 import uuid
 from dotenv import load_dotenv
@@ -152,35 +153,26 @@ def process_invoice():
 # Function to process the files using the perfect4.py logic
 def process_files(invoice_path, chart_path, sheet_name, unique_id):
     try:
-        # This is where you would integrate your perfect4.py code
-        # For now, we'll create a placeholder that just extracts basic PDF info
+        # This is a simplified placeholder implementation without pandas and PyPDF2
+        # In the future, we'll integrate your perfect4.py code here
         
-        # Create an output file path
-        output_filename = f"{unique_id}_processed_results.xlsx"
+        # Create an output file path - using .txt instead of .xlsx for simplicity
+        output_filename = f"{unique_id}_processed_results.txt"
         output_path = os.path.join(app.config['PROCESSED_FOLDER'], output_filename)
         
-        # Extract text from PDF as a simple placeholder
-        with open(invoice_path, 'rb') as pdf_file:
-            pdf_reader = PyPDF2.PdfReader(pdf_file)
-            text = ""
-            for page_num in range(len(pdf_reader.pages)):
-                text += pdf_reader.pages[page_num].extract_text()
+        # Just log file information instead of actual processing
+        invoice_size = os.path.getsize(invoice_path)
+        chart_size = os.path.getsize(chart_path)
         
-        # Read chart of accounts
-        if sheet_name and sheet_name != '':
-            df = pd.read_excel(chart_path, sheet_name=sheet_name)
-        else:
-            df = pd.read_excel(chart_path)
-        
-        # Create a simple output DataFrame (this would be replaced with actual processing)
-        output_df = pd.DataFrame({
-            'Invoice Text Preview': [text[:200]],
-            'Chart Rows': [len(df)],
-            'Processing Status': ['Placeholder - Replace with actual AI processing']
-        })
-        
-        # Save to Excel
-        output_df.to_excel(output_path, index=False)
+        # Create a simple text file with the processing info
+        with open(output_path, 'w') as f:
+            f.write(f"Invoice File: {os.path.basename(invoice_path)}\n")
+            f.write(f"Invoice Size: {invoice_size} bytes\n")
+            f.write(f"Chart of Accounts: {os.path.basename(chart_path)}\n")
+            f.write(f"Chart Size: {chart_size} bytes\n")
+            f.write(f"Sheet Name: {sheet_name if sheet_name else 'Default'}\n")
+            f.write(f"Processing Timestamp: {datetime.now().isoformat()}\n")
+            f.write("Status: Placeholder - Actual processing will be implemented later")
         
         return output_filename
     except Exception as e:
@@ -188,7 +180,7 @@ def process_files(invoice_path, chart_path, sheet_name, unique_id):
         traceback.print_exc()
         return None
 
-# Route to get Excel sheet names
+# Route to get Excel sheet names - simplified version for initial deployment
 @app.route('/api/get-sheets', methods=['POST'])
 def get_excel_sheets():
     try:
@@ -203,21 +195,14 @@ def get_excel_sheets():
         if not file.filename.endswith(('.xls', '.xlsx')):
             return jsonify({'error': 'File must be an Excel file (.xls or .xlsx)'}), 400
             
-        # Save the file temporarily
-        filename = secure_filename(file.filename)
-        temp_path = os.path.join(app.config['TEMP_FOLDER'], filename)
-        file.save(temp_path)
-        
-        # Get sheet names
-        excel_file = pd.ExcelFile(temp_path)
-        sheet_names = excel_file.sheet_names
-        
-        # Clean up the temporary file
-        os.remove(temp_path)
+        # For initial deployment, return dummy sheet names
+        # This will be replaced with actual Excel parsing later
+        dummy_sheet_names = ['Sheet1', 'Sheet2', 'Data']
         
         return jsonify({
             'status': 'success',
-            'sheet_names': sheet_names
+            'message': 'Full Excel parsing will be implemented in a future update',
+            'sheet_names': dummy_sheet_names
         })
         
     except Exception as e:
