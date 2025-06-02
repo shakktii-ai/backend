@@ -334,19 +334,30 @@ def process_files(invoice_path, chart_path, sheet_name, unique_id):
         if not invoice_text:
             raise ValueError("Could not extract text from invoice PDF")
 
-        # 2. Analyze the Chart of Accounts Excel structure
+        # 2. Read the Chart of Accounts data first
+        coa_sheet = pd.read_excel(chart_path, sheet_name=sheet_name)
+        
+        # 3. Analyze the Chart of Accounts Excel structure
         excel_structure = analyze_excel_structure(chart_path, sheet_name)
         if not excel_structure:
             raise ValueError("Could not analyze Chart of Accounts structure")
-
-        # 3. Read the Chart of Accounts data
-        coa_sheet = pd.read_excel(chart_path, sheet_name=sheet_name)
-
+            
+        # Ensure excel_structure has the expected format
+        if isinstance(excel_structure, tuple):
+            # If it's a tuple, convert to the expected dictionary format
+            excel_structure = {
+                'columns': list(coa_sheet.columns),
+                'data_types': {col: str(coa_sheet[col].dtype) for col in coa_sheet.columns}
+            }
+        
         # 4. Use Claude to classify invoice and match to Chart of Accounts
         api_key = os.getenv('ANTHROPIC_API_KEY')
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY not found in environment variables")
-
+            
+        print(f"Excel structure: {excel_structure}")
+        print(f"Columns in COA sheet: {list(coa_sheet.columns)}")
+            
         invoice_data = classify_invoice_with_claude(invoice_text, coa_sheet, excel_structure, api_key)
         if not invoice_data or 'error' in invoice_data:
             raise ValueError(f"Claude classification failed: {invoice_data.get('error', 'Unknown error')}")
