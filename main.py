@@ -3,15 +3,145 @@ import os
 import sys
 import traceback
 from datetime import datetime
-from werkzeug.utils import secure_filename
-# Re-enabling pandas for Excel output
-import pandas as pd
-# import PyPDF2 - still keeping this commented out for now
-from flask_cors import CORS
-# import anthropic
-import json
 import uuid
+from flask_cors import CORS
+from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
+import pandas as pd
+import numpy as np
+from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.utils.dataframe import dataframe_to_rows
+import PyPDF2
+import anthropic
+import json
+import re
+from perfect4 import (
+    extract_invoice_data,
+    analyze_excel_structure,
+    classify_invoice_with_claude,
+    update_chart_of_accounts,
+    safe_print
+)
+
+# Initialize Anthropic client
+anthropic = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+
+# Helper function to analyze chart of accounts with Claude
+def analyze_coa_with_claude(coa_data):
+    try:
+        # Get example rows from the Excel sheet and convert to string format
+        example_rows = []
+        for _, row in coa_data.head(5).iterrows():
+            row_dict = {}
+            for col in coa_data.columns:
+                value = row[col]
+                if pd.isna(value):
+                    row_dict[col] = ""
+                elif isinstance(value, (pd.Timestamp, datetime)):
+                    row_dict[col] = value.strftime('%Y-%m-%d')
+                else:
+                    row_dict[col] = str(value)
+            example_rows.append(row_dict)
+
+        # Analyze patterns in code columns
+        code_patterns = {}
+        for col in coa_data.columns:
+            if 'code' in col.lower() or 'account' in col.lower():
+                patterns = coa_data[col].dropna().astype(str).unique().tolist()[:5]
+                if patterns:
+                    code_patterns[col] = patterns
+
+        # Analyze hierarchy and relationships
+        hierarchy = {}
+        relationships = {}
+        for col in coa_data.columns:
+            if 'group' in col.lower() or 'category' in col.lower():
+                values = coa_data[col].dropna().astype(str).unique().tolist()
+                if values:
+                    hierarchy[col] = values
+            if 'code' in col.lower() and any(ref in col.lower() for ref in ['ref', 'related', 'parent']):
+                related_cols = [c for c in coa_data.columns if c != col and 'name' in c.lower()]
+                if related_cols:
+                    relationships[col] = related_cols[0]
+
+        # Prepare the prompt for Claude
+        prompt = f"""You are an AI accountant. Analyze this chart of accounts and provide a complete financial classification structure.
+
+**Chart of Accounts Data:**
+{coa_data.to_string()}
+
+**Example Rows:**
+{json.dumps(example_rows, indent=2)}
+
+**Code Patterns Found:**
+{json.dumps(code_patterns, indent=2)}
+
+**Hierarchy Information:**
+{json.dumps(hierarchy, indent=2)}
+
+**Column Relationships:**
+{json.dumps(relationships, indent=2)}
+
+Please analyze and provide:
+1. The complete account hierarchy (main groups, sub groups, detail accounts)
+2. The account types and their purposes
+3. Specific patterns in account codes and their meanings
+4. Rules for invoice categorization based on:
+   - Account code structure
+   - Group hierarchies
+   - Naming conventions
+   - Common transaction types
+
+Provide your analysis in this JSON format:
+{{
+    "hierarchy": {{
+        "main_groups": [],
+        "sub_groups": {{}},
+        "detail_accounts": {{}}
+    }},
+    "account_types": {{
+        "asset": [],
+        "liability": [],
+        "equity": [],
+        "revenue": [],
+        "expense": []
+    }},
+    "code_patterns": {{
+        "structure": "",
+        "examples": {{}}
+    }},
+    "categorization_rules": [
+        {{
+            "pattern": "",
+            "account_type": "",
+            "description": ""
+        }}
+    ]
+}}"""
+
+        # Get Claude's analysis
+        message = anthropic.messages.create(
+            model="claude-3-opus-20240229",
+            max_tokens=4000,
+            temperature=0,
+            system="You are an expert accountant specializing in financial analysis and chart of accounts structure. Always provide detailed, structured analysis in the exact JSON format requested.",
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        # Extract JSON from response
+        match = re.search(r'```json\s*({[\s\S]*?})\s*```', message.content[0].text)
+        if not match:
+            raise ValueError("No JSON found in Claude's response")
+
+        analysis = json.loads(match.group(1))
+        return analysis
+
+    except Exception as e:
+        print(f"Error analyzing chart of accounts with Claude: {str(e)}")
+        return {"error": str(e)}
 
 # Load environment variables from .env file if it exists
 load_dotenv()
@@ -164,18 +294,38 @@ def process_invoice():
             if coa_data is not None:
                 coa_data.to_excel(writer, sheet_name='Chart of Accounts', index=False)
             
-            # Add a sample processed data sheet with some mock invoice data
-            # This would be replaced with actual processing logic later
-            invoice_data = {
-                'Code': ['583', '584', '585', '586', '587', '588', '589'],
-                'Name': ['IKE-05-0803-0003', 'IKE-05-0803-0004', 'IKE-05-0804-0000', 'IKE-05-0804-0001', 'IKE-05-0804-0002', 'IKE-05-00-00-0000', 'IKE-06-00-00-0001'],
-                'MainGpCode': ['IK', 'IK', 'IK', 'IK', 'IK', 'IK', 'IK'],
-                'Primary Group': ['05-', '05-', '05-', '05-', '05-', '06-', '06-'],
-                'Main Group': ['Indirect Expenses', 'Indirect Expenses', 'Indirect Expenses', 'Indirect Expenses', 'Indirect Expenses', 'Profit & Loss A/c', 'Profit & Loss A/c'],
-                'Sub Group': ['08- Insurance', '08- Insurance', '04- Insurance for Liability', '04- Insurance for Liability', '04- Insurance for Liability', '00-', '00-'],
-                'Ledger': ['Property and Plant Insurance', 'Travel Insurance', 'Professional Indemnity', 'Third Party Liability', 'Contractor All Risk Policy', '0002', '0001']
-            }
-            invoice_df = pd.DataFrame(invoice_data)
+            # Extract invoice text and process with perfect4.py
+            invoice_text = extract_invoice_data(invoice_path)
+            if not invoice_text:
+                raise ValueError("Could not extract text from invoice PDF")
+
+            # Analyze Chart of Accounts structure
+            excel_structure = analyze_excel_structure(chart_path, sheet_name)
+            if not excel_structure:
+                raise ValueError("Could not analyze Chart of Accounts structure")
+
+            # Get Claude API key
+            api_key = os.getenv('ANTHROPIC_API_KEY')
+            if not api_key:
+                raise ValueError("ANTHROPIC_API_KEY not found in environment variables")
+
+            # Process invoice with Claude
+            invoice_data = classify_invoice_with_claude(invoice_text, coa_sheet, excel_structure, api_key)
+            if not invoice_data or 'error' in invoice_data:
+                raise ValueError(f"Claude classification failed: {invoice_data.get('error', 'Unknown error')}")
+
+            # Create processed invoice DataFrame
+            processed_data = []
+            for entry in invoice_data.get('entries', []):
+                processed_data.append({
+                    'Date': entry.get('date', ''),
+                    'Description': entry.get('description', ''),
+                    'Amount': entry.get('amount', ''),
+                    'Account Code': entry.get('account_code', ''),
+                    'Account Name': entry.get('account_name', ''),
+                    'Classification': entry.get('classification', '')
+                })
+            invoice_df = pd.DataFrame(processed_data)
             invoice_df.to_excel(writer, sheet_name='Processed Invoice', index=False)
         
         # Return a response format that matches what the frontend expects
@@ -220,18 +370,24 @@ def process_invoice():
         invoice_file.save(invoice_path)
         chart_file.save(chart_path)
         
-        # Process the invoice (this would call your perfect4.py logic)
-        result_filename = process_files(invoice_path, chart_path, sheet_name, unique_id)
+        # Process the invoice using perfect4.py logic
+        result = process_files(invoice_path, chart_path, sheet_name, unique_id)
         
-        if result_filename:
+        if result.get('status') == 'success':
             return jsonify({
                 'status': 'success',
-                'message': 'Invoice processed successfully',
-                'result_file': result_filename
+                'message': 'Invoice and chart of accounts processed successfully',
+                'file_info': {
+                    'path': result['output_path'],
+                    'filename': result['filename'],
+                    'download_url': f'/api/download-file?filename={result["filename"]}',
+                    'file_type': 'excel'
+                },
+                'received_form_data': list(request.form.keys())
             })
         else:
             return jsonify({
-                'error': 'Failed to process invoice'
+                'error': result.get('message', 'Failed to process invoice')
             }), 500
             
     except Exception as e:
@@ -244,32 +400,89 @@ def process_invoice():
 # Function to process the files using the perfect4.py logic
 def process_files(invoice_path, chart_path, sheet_name, unique_id):
     try:
-        # This is a simplified placeholder implementation without pandas and PyPDF2
-        # In the future, we'll integrate your perfect4.py code here
-        
-        # Create an output file path - using .txt instead of .xlsx for simplicity
-        output_filename = f"{unique_id}_processed_results.txt"
+        # 1. Extract text from the invoice PDF
+        invoice_text = extract_invoice_data(invoice_path)
+        if not invoice_text:
+            raise ValueError("Could not extract text from invoice PDF")
+
+        # 2. Analyze the Chart of Accounts Excel structure
+        excel_structure = analyze_excel_structure(chart_path, sheet_name)
+        if not excel_structure:
+            raise ValueError("Could not analyze Chart of Accounts structure")
+
+        # 3. Read the Chart of Accounts data
+        coa_sheet = pd.read_excel(chart_path, sheet_name=sheet_name)
+
+        # 4. Use Claude to classify invoice and match to Chart of Accounts
+        api_key = os.getenv('ANTHROPIC_API_KEY')
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY not found in environment variables")
+
+        invoice_data = classify_invoice_with_claude(invoice_text, coa_sheet, excel_structure, api_key)
+        if not invoice_data or 'error' in invoice_data:
+            raise ValueError(f"Claude classification failed: {invoice_data.get('error', 'Unknown error')}")
+
+        # 5. Create the output Excel file with multiple sheets
+        output_filename = f"{unique_id}_processed_results.xlsx"
         output_path = os.path.join(app.config['PROCESSED_FOLDER'], output_filename)
-        
-        # Just log file information instead of actual processing
-        invoice_size = os.path.getsize(invoice_path)
-        chart_size = os.path.getsize(chart_path)
-        
-        # Create a simple text file with the processing info
-        with open(output_path, 'w') as f:
-            f.write(f"Invoice File: {os.path.basename(invoice_path)}\n")
-            f.write(f"Invoice Size: {invoice_size} bytes\n")
-            f.write(f"Chart of Accounts: {os.path.basename(chart_path)}\n")
-            f.write(f"Chart Size: {chart_size} bytes\n")
-            f.write(f"Sheet Name: {sheet_name if sheet_name else 'Default'}\n")
-            f.write(f"Processing Timestamp: {datetime.now().isoformat()}\n")
-            f.write("Status: Placeholder - Actual processing will be implemented later")
-        
-        return output_filename
+
+        # Create a new workbook
+        wb = Workbook()
+
+        # Sheet 1: Request Info
+        ws1 = wb.active
+        ws1.title = "Request Info"
+        request_info = [
+            ["Timestamp", datetime.now().isoformat()],
+            ["Invoice File", os.path.basename(invoice_path)],
+            ["Chart of Accounts File", os.path.basename(chart_path)],
+            ["Sheet Name", sheet_name],
+            ["Processing ID", unique_id]
+        ]
+        for row in request_info:
+            ws1.append(row)
+
+        # Sheet 2: Chart of Accounts Data
+        ws2 = wb.create_sheet("Chart of Accounts")
+        for r_idx, row in enumerate(dataframe_to_rows(coa_sheet, index=False, header=True)):
+            ws2.append(row)
+
+        # Sheet 3: Processed Invoice Data
+        ws3 = wb.create_sheet("Processed Invoice")
+        headers = ["Date", "Description", "Amount", "Account Code", "Account Name", "Classification"]
+        ws3.append(headers)
+
+        # Add the processed invoice data
+        for entry in invoice_data.get('entries', []):
+            row = [
+                entry.get('date', ''),
+                entry.get('description', ''),
+                entry.get('amount', ''),
+                entry.get('account_code', ''),
+                entry.get('account_name', ''),
+                entry.get('classification', '')
+            ]
+            ws3.append(row)
+
+        # Save the workbook
+        wb.save(output_path)
+
+        return {
+            'status': 'success',
+            'message': 'Invoice processed successfully',
+            'output_path': output_path,
+            'filename': output_filename
+        }
+
     except Exception as e:
-        print(f"Error in process_files: {str(e)}")
+        print(f"Error processing files: {str(e)}")
         traceback.print_exc()
-        return None
+        return {
+            'status': 'error',
+            'message': str(e)
+        }
+
+
 
 # Route to get Excel sheet names - simplified version for initial deployment
 @app.route('/api/get-sheets', methods=['POST'])
