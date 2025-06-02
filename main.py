@@ -102,15 +102,21 @@ application = app
 @app.route('/api/process-invoice', methods=['POST'])
 def process_invoice():
     try:
+        print("Received request files:", list(request.files.keys()))
+        print("Received form data:", list(request.form.keys()))
+        
         # Check if both files are present in the request
-        if 'invoice' not in request.files or 'chart_of_accounts' not in request.files:
+        # Support both the frontend field names (invoiceFile, coaFile) and our backend names
+        if ('invoiceFile' not in request.files and 'invoice' not in request.files) or \
+           ('coaFile' not in request.files and 'chart_of_accounts' not in request.files):
             return jsonify({
                 'error': 'Both invoice and chart of accounts files are required'
             }), 400
         
-        invoice_file = request.files['invoice']
-        chart_file = request.files['chart_of_accounts']
-        sheet_name = request.form.get('sheet_name', '')  # Optional sheet name
+        # Get files using frontend field names or fallback to backend names
+        invoice_file = request.files.get('invoiceFile') or request.files.get('invoice')
+        chart_file = request.files.get('coaFile') or request.files.get('chart_of_accounts')
+        sheet_name = request.form.get('sheetName', '')  # Optional sheet name - from frontend
         
         # Check if filenames are valid
         if invoice_file.filename == '' or chart_file.filename == '':
