@@ -3,13 +3,25 @@ services:
     name: invoice-processor-api
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn wsgi:app
+    startCommand: gunicorn main:app
     envVars:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: FLASK_ENV
         value: production
       - key: FLASK_APP
+        value: main.py
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PYTHONDONTWRITEBYTECODE
+        value: "1"
+    plan: free
+    autoDeploy: true
+    region: singapore
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 10000
         value: app.main
       - key: UPLOAD_FOLDER
         value: uploads
