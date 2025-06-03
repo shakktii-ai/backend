@@ -11,7 +11,9 @@ import json
 from perfect4 import (
     process_invoice_file,
     get_excel_sheets,
-    safe_print
+    safe_print,
+    analyze_excel_structure,
+    update_chart_of_accounts
 )
 
 # Initialize Flask app and configuration

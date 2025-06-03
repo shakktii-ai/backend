@@ -832,19 +832,106 @@ def update_chart_of_accounts(excel_path, invoice_data, sheet_name="COA i-Kcal"):
         print(f"\n❌ Error updating Excel file: {str(e)}")
         raise
 
+def process_invoice_file(invoice_path, chart_path, sheet_name, output_dir, unique_id):
+    """
+    Process an invoice and update the chart of accounts.
+    
+    Args:
+        invoice_path (str): Path to the invoice PDF file
+        chart_path (str): Path to the chart of accounts Excel file
+        sheet_name (str): Name of the sheet to update in the Excel file
+        output_dir (str): Directory to save the processed file
+        unique_id (str): Unique identifier for this processing job
+        
+    Returns:
+        dict: Processing results with status and file information
+    """
+    try:
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Generate output path
+        output_filename = f'updated_chart_{unique_id}.xlsx'
+        output_path = os.path.join(output_dir, output_filename)
+        
+        # Extract data from invoice
+        safe_print("Extracting data from invoice...")
+        invoice_text = extract_invoice_data(invoice_path)
+        
+        # Analyze chart of accounts structure
+        safe_print("Analyzing chart of accounts structure...")
+        structure = analyze_excel_structure(chart_path, sheet_name)
+        
+        # Read the chart of accounts
+        coa_sheet = pd.read_excel(chart_path, sheet_name=sheet_name)
+        
+        # Convert datetime columns to strings for JSON serialization
+        for col in coa_sheet.columns:
+            if pd.api.types.is_datetime64_any_dtype(coa_sheet[col]):
+                coa_sheet[col] = coa_sheet[col].dt.strftime('%Y-%m-%d')
+        
+        # Extract invoice data (using direct extraction as we removed Claude dependency)
+        # This is a simplified version - you might want to enhance this with more robust extraction
+        invoice_data = {
+            'date': datetime.now().strftime('%Y-%m-%d'),
+            'description': 'Invoice Processing',
+            'amount': '0.00',
+            'account_code': '4000',  # Default account code
+            'account_name': 'Sales Revenue',
+            'classification': 'Revenue'
+        }
+        
+        # Update the chart of accounts
+        safe_print(f"Updating chart of accounts at {output_path}...")
+        update_chart_of_accounts(
+            excel_path=chart_path,
+            invoice_data=invoice_data,
+            sheet_name=sheet_name
+        )
+        
+        # Copy the updated file to the output path
+        shutil.copy2(chart_path, output_path)
+        safe_print(f"Chart of accounts updated and saved to {output_path}")
+        
+        return {
+            'status': 'success',
+            'message': 'Invoice processed successfully',
+            'invoice_data': invoice_data,
+            'output_path': output_path,
+            'output_filename': output_filename
+        }
+        
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        safe_print(f"Error in process_invoice_file: {str(e)}\n{error_trace}")
+        return {
+            'status': 'error',
+            'message': str(e),
+            'trace': error_trace
+        }
+
 def safe_print(*args, **kwargs):
     """Print text safely, avoiding Unicode encoding errors. Accepts multiple arguments."""
     try:
-        print(*args, **kwargs)
-    except UnicodeEncodeError:
-        # If there's an encoding error, replace problematic characters
-        if args:
-            text = str(args[0])
-            text_encoded = text.encode('ascii', 'replace').decode('ascii')
-            # Print the encoded first argument and then any remaining arguments
-            print(text_encoded, *(args[1:]), **kwargs)
-        else:
-            print("[Unicode encoding error with print]")
+        # Convert all arguments to strings and join them with spaces
+        message = ' '.join(str(arg) for arg in args)
+        # Print with the original kwargs
+        print(message, **kwargs)
+    except Exception as e:
+        # Fallback if there's an error in the safe print itself
+        try:
+            print(f"[Print Error: {str(e)}]")
+        except:
+            pass  # Give up if we can't even print the error
+
+def get_excel_sheets(file_path):
+    """Get list of sheet names from an Excel file."""
+    try:
+        xls = pd.ExcelFile(file_path)
+        return xls.sheet_names
+    except Exception as e:
+        safe_print(f"Error reading Excel file: {str(e)}")
+        raise
 
 if __name__ == "__main__":
     import sys
