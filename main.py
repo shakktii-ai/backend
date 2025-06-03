@@ -197,20 +197,40 @@ def process_invoice():
             unique_id=unique_id
         )
         
-        # Add download link to the response
+        # Add download link and file info to the response
         if 'status' in result and result['status'] == 'success':
-            result['download_link'] = f'/api/download-file/{os.path.basename(result["output_path"])}'
-        
-        safe_print("Processing completed successfully")
-        return jsonify(result)
+            # Create the response object with the structure expected by the frontend
+            response_data = {
+                'status': 'success',
+                'message': result.get('message', 'Invoice processed successfully'),
+                'file_info': {
+                    'filename': result.get('output_filename', ''),
+                    'path': result.get('output_path', ''),
+                    'download_url': f'/api/download-file/{os.path.basename(result["output_path"])}',
+                    'file_type': 'excel'
+                },
+                'invoice_data': result.get('invoice_data', {})
+            }
+            safe_print("Processing completed successfully")
+            return jsonify(response_data)
+        else:
+            # If there was an error, return the error details
+            return jsonify({
+                'status': 'error',
+                'error': result.get('message', 'Failed to process invoice'),
+                'details': result.get('trace', '')
+            }), 500
         
     except Exception as e:
         error_trace = traceback.format_exc()
-        safe_print(f"Error in process_invoice: {str(e)}\n{error_trace}")
+        error_message = str(e)
+        safe_print(f"Error in process_invoice: {error_message}\n{error_trace}")
         return jsonify({
             'status': 'error',
-            'message': str(e),
-            'trace': error_trace
+            'error': error_message,
+            'message': error_message,  # For backward compatibility
+            'details': error_trace,
+            'file_info': None
         }), 500
         
     finally:
