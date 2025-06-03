@@ -188,14 +188,25 @@ def process_invoice():
         
         safe_print("Files saved successfully. Starting processing...")
         
-        # Process the files using the function from perfect4.py
+        # Ensure the processed directory exists
+        processed_dir = app.config['PROCESSED_FOLDER']
+        os.makedirs(processed_dir, exist_ok=True)
+        
+        # Process the invoice using perfect4 module
         result = process_invoice_file(
             invoice_path=invoice_path,
             chart_path=chart_path,
             sheet_name=sheet_name,
-            output_dir=app.config['PROCESSED_FOLDER'],
+            output_dir=processed_dir,
             unique_id=unique_id
         )
+        
+        # Ensure the output path is using the correct processed directory
+        if 'output_path' in result:
+            # Make sure the path is using the correct directory
+            filename = os.path.basename(result['output_path'])
+            result['output_path'] = os.path.join(processed_dir, filename)
+            result['output_filename'] = filename
         
         # Add download link and file info to the response
         if 'status' in result and result['status'] == 'success':
@@ -325,32 +336,61 @@ def download_file(filename):
         # If we still don't have a filename, return an error
         if not filename:
             return jsonify({
+                'status': 'error',
                 'error': "No filename provided. Use /api/download-file/<filename> or /api/download-file?filename=<filename>"
             }), 400
         
-        print(f"Attempting to download file: {filename}")
+        safe_print(f"Attempting to download file: {filename}")
         
-        # Ensure the filename is secure
-        filename = secure_filename(filename)
+        # Ensure the filename is secure and doesn't contain path traversal
+        filename = secure_filename(os.path.basename(filename))
+        
+        # Define the base directory for downloads
+        base_dir = app.config['PROCESSED_FOLDER']
+        
+        # Construct absolute path
+        file_path = os.path.abspath(os.path.join(base_dir, filename))
+        
+        # Security check: Ensure the file is within the allowed directory
+        if not file_path.startswith(os.path.abspath(base_dir)):
+            safe_print(f"Security alert: Attempted path traversal: {file_path}")
+            return jsonify({
+                'status': 'error',
+                'error': 'Invalid file path'
+            }), 403
         
         # Check if file exists
-        file_path = os.path.join(app.config['PROCESSED_FOLDER'], filename)
         if not os.path.exists(file_path):
+            safe_print(f"File not found: {file_path}")
+            # Try to list files in the directory for debugging
+            try:
+                files = os.listdir(base_dir)
+                safe_print(f"Available files in {base_dir}: {files}")
+            except Exception as e:
+                safe_print(f"Error listing directory {base_dir}: {str(e)}")
+            
             return jsonify({
-                'error': f"File not found: {filename}"
+                'status': 'error',
+                'error': f'File not found: {filename}',
+                'available_files': files if 'files' in locals() else []
             }), 404
             
+        safe_print(f"Serving file: {file_path}")
         return send_from_directory(
-            directory=app.config['PROCESSED_FOLDER'],
-            path=filename,
-            as_attachment=True
+            directory=os.path.dirname(file_path),
+            path=os.path.basename(file_path),
+            as_attachment=True,
+            download_name=filename  # This sets the filename in the download dialog
         )
+        
     except Exception as e:
-        print(f"Error downloading file: {str(e)}")
+        error_msg = f"Error downloading file: {str(e)}"
+        safe_print(error_msg)
         traceback.print_exc()
         return jsonify({
-            'error': f"File not found or error downloading: {str(e)}"
-        }), 404
+            'status': 'error',
+            'error': error_msg
+        }), 500
 
 # This is needed for running with Gunicorn on Render
 application = app
