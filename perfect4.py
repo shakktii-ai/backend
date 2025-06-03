@@ -11,14 +11,14 @@ Version: 1.0
 
 import pandas as pd
 import PyPDF2
-import os
-import sys
-import json
 import re
+import json
+import os
 import shutil
+import traceback
 from datetime import datetime
-import pandas as pd
-from openpyxl import load_workbook
+from typing import Dict, Any, List, Optional, Union, Tuple
+import openpyxl
 from openpyxl.utils import get_column_letter
 import PyPDF2
 import anthropic
@@ -739,98 +739,176 @@ def create_new_excel_file(output_path, data):
         raise
 
 def update_chart_of_accounts(excel_path, invoice_data, sheet_name="COA i-Kcal"):
-    """Updates the Chart of Accounts Excel sheet with extracted invoice data."""
-    print("\nStarting Excel update process...")
-    print(f"Excel Path: {excel_path}")
-    print(f"Sheet Name: {sheet_name}")
+    """
+    Updates the Chart of Accounts Excel sheet with extracted invoice data.
+    
+    Args:
+        excel_path (str): Path to the Excel file to update
+        invoice_data (dict): Dictionary containing the invoice data to add
+        sheet_name (str): Name of the sheet to update (default: 'COA i-Kcal')
+        
+    Returns:
+        bool: True if update was successful, False otherwise
+        
+    Raises:
+        ValueError: If invoice_data is not a dictionary or is empty
+        FileNotFoundError: If the Excel file doesn't exist
+        PermissionError: If the Excel file is read-only
+        Exception: For any other errors during the update process
+    """
+    safe_print("\n=== Starting Excel update process ===")
+    safe_print(f"Excel Path: {excel_path}")
+    safe_print(f"Sheet Name: {sheet_name}")
+    
+    # Validate invoice_data
+    if not isinstance(invoice_data, dict):
+        error_msg = f"invoice_data must be a dictionary, got {type(invoice_data).__name__}"
+        safe_print(f"❌ {error_msg}")
+        safe_print(f"invoice_data value: {invoice_data}")
+        raise ValueError(error_msg)
+    
+    if not invoice_data:
+        error_msg = "invoice_data dictionary is empty"
+        safe_print(f"❌ {error_msg}")
+        raise ValueError(error_msg)
+    
+    safe_print("Invoice data keys:", list(invoice_data.keys()))
+    safe_print("Invoice data values:", list(invoice_data.values()))
+    
+    wb = None  # Initialize wb variable for use in finally block
     
     try:
         # Check if file exists and is accessible
         if not os.path.exists(excel_path):
-            raise FileNotFoundError(f"Excel file not found at: {excel_path}")
+            error_msg = f"Excel file not found at: {excel_path}"
+            safe_print(f"❌ {error_msg}")
+            raise FileNotFoundError(error_msg)
         
         # Check if file is read-only
         if not os.access(excel_path, os.W_OK):
-            raise PermissionError("Excel file is read-only. Please close the file if it's open in Excel and ensure you have write permissions.")
+            error_msg = "Excel file is read-only. Please close the file if it's open in Excel and ensure you have write permissions."
+            safe_print(f"❌ {error_msg}")
+            raise PermissionError(error_msg)
         
         # Load the existing workbook
+        safe_print("Loading workbook...")
         wb = load_workbook(excel_path, keep_vba=True)  # keep_vba=True to preserve macros
         
         # Get the target sheet
         if sheet_name not in wb.sheetnames:
-            raise ValueError(f"Sheet '{sheet_name}' not found in the Excel file")
+            error_msg = f"Sheet '{sheet_name}' not found in the Excel file. Available sheets: {wb.sheetnames}"
+            safe_print(f"❌ {error_msg}")
+            raise ValueError(error_msg)
         
         ws = wb[sheet_name]
+        safe_print(f"Successfully accessed sheet: {sheet_name}")
         
         # Find the first empty row by checking each row from the bottom up
         max_row = ws.max_row
         last_filled_row = 0
         
+        safe_print(f"Checking for last filled row (max_row: {max_row})...")
+        
         # Find the last row with data
         for row in range(max_row, 0, -1):
             if any(cell.value for cell in ws[row]):
                 last_filled_row = row
+                safe_print(f"Found last filled row: {last_filled_row}")
                 break
         
         # The new row will be one after the last filled row
         new_row = last_filled_row + 1
-        
-        print(f"\nLast filled row: {last_filled_row}")
-        print(f"Adding new data to row: {new_row}")
+        safe_print(f"Will add new data to row: {new_row}")
         
         # Get column headers from the first row
         headers = [cell.value for cell in ws[1]]
-        print("\nExcel Headers:", headers)
+        safe_print(f"\nExcel Headers: {headers}")
+        safe_print(f"Invoice data keys: {list(invoice_data.keys())}")
         
         # Map the invoice data to the correct columns
+        update_count = 0
         for col_idx, header in enumerate(headers, 1):
+            if not header:  # Skip empty headers
+                continue
+                
             col_letter = get_column_letter(col_idx)
-            cell = ws[f"{col_letter}{new_row}"]
+            cell_ref = f"{col_letter}{new_row}"
+            
+            # Get the value from invoice_data, default to empty string if not found
             value = invoice_data.get(header, "")
             
+            # Skip if the header isn't in invoice_data and we don't have a value
+            if not value and header not in invoice_data:
+                continue
+                
             # Convert value to appropriate type based on existing data
-            if header in invoice_data:
-                existing_value = ws[f"{col_letter}{last_filled_row}"].value
-                if isinstance(existing_value, (int, float)):
+            if last_filled_row > 0:  # Only if we have existing data to check types
+                try:
+                    cell_ref = f"{col_letter}{last_filled_row}"
+                    safe_print(f"Accessing cell {cell_ref} in column {col_letter} (header: {header})")
+                    
+                    # Add validation for column letter and row number
+                    if not col_letter.isalpha() or last_filled_row <= 0:
+                        safe_print(f"Invalid cell reference: {col_letter}{last_filled_row}")
+                        continue
+                        
+                    # Try to access the cell with better error handling
                     try:
-                        value = float(value) if '.' in str(value) else int(value)
-                    except (ValueError, TypeError):
-                        pass  # Keep as string if conversion fails
-                elif isinstance(existing_value, datetime):
-                    try:
-                        value = datetime.strptime(str(value), '%Y-%m-%d')
-                    except (ValueError, TypeError):
-                        pass  # Keep as string if conversion fails
+                        existing_cell = ws.cell(row=last_filled_row, column=col_idx)
+                    except Exception as e:
+                        safe_print(f"Error accessing cell {cell_ref}: {str(e)}")
+                        continue
+                        
+                    if existing_cell is None:
+                        safe_print(f"Warning: Cell {cell_ref} is None")
+                        continue
+                        
+                    if existing_cell.value is not None:
+                        if isinstance(existing_cell.value, (int, float)):
+                            try:
+                                value = float(value) if '.' in str(value) else int(value)
+                            except (ValueError, TypeError):
+                                safe_print(f"Warning: Could not convert value '{value}' to number for column {header}")
+                except Exception as e:
+                    safe_print(f"Error processing cell {col_letter}{last_filled_row}: {str(e)}")
+                    continue
+                        
+                    if existing_cell.value is not None and isinstance(existing_cell.value, datetime):
+                        try:
+                            value = datetime.strptime(str(value), '%Y-%m-%d')
+                        except (ValueError, TypeError):
+                            safe_print(f"Warning: Could not convert value '{value}' to date for column {header}")
+                            continue
             
-            cell.value = value
-            print(f"Setting {col_letter}{new_row} ({header}) = {value}")
+            # Set the cell value
+            ws[cell_ref] = value
+            update_count += 1
+            safe_print(f"Set {cell_ref} = {value} (type: {type(value).__name__})")
         
-        # Save the workbook
-        try:
+        # Save the changes if we updated any cells
+        if update_count > 0:
+            safe_print(f"\nSaving changes to {excel_path}...")
             wb.save(excel_path)
-            print(f"\n✅ Successfully updated row {new_row} in the Excel file")
-            return excel_path
-        except PermissionError:
-            print("\n❌ Error: Cannot save to Excel file. Please ensure:")
-            print("1. The file is not open in Excel or any other program")
-            print("2. You have write permissions for the file")
-            print("3. The file is not read-only")
-            print("\nPlease close the file and try again.")
-            raise
-        except Exception as e:
-            print(f"\n❌ Error saving Excel file: {str(e)}")
-            raise
+            safe_print("Changes saved successfully")
+            return True
+        else:
+            safe_print("\nNo cells were updated. File not saved.")
+            return False
             
-    except PermissionError as e:
-        print("\n❌ Permission Error:")
-        print("1. Please close the Excel file if it's open")
-        print("2. Make sure you have write permissions for the file")
-        print("3. Check if the file is read-only")
-        print(f"\nError details: {str(e)}")
-        raise
     except Exception as e:
-        print(f"\n❌ Error updating Excel file: {str(e)}")
-        raise
+        error_msg = f"Error updating Excel file: {str(e)}"
+        safe_print(f"\n❌ {error_msg}")
+        safe_print(f"Traceback: {traceback.format_exc()}")
+        raise Exception(error_msg) from e
+        
+    finally:
+        # Make sure to close the workbook to prevent memory leaks
+        if wb is not None:
+            try:
+                wb.close()
+                safe_print("Workbook closed successfully")
+            except Exception as e:
+                safe_print(f"Warning: Error closing workbook: {str(e)}")
 
 def process_invoice_file(invoice_path, chart_path, sheet_name, output_dir, unique_id):
     """
