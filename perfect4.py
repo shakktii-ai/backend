@@ -881,25 +881,45 @@ def process_invoice_file(invoice_path, chart_path, sheet_name, output_dir, uniqu
             'classification': 'Revenue'
         }
         
-        # Update the chart of accounts
-        safe_print(f"Updating chart of accounts at {output_path}...")
-        update_chart_of_accounts(
-            excel_path=chart_path,
-            invoice_data=invoice_data,
-            sheet_name=sheet_name
-        )
+        # Create a temporary file for the updated chart
+        temp_output = os.path.join(output_dir, f'temp_{unique_id}.xlsx')
         
-        # Copy the updated file to the output path
-        shutil.copy2(chart_path, output_path)
-        safe_print(f"Chart of accounts updated and saved to {output_path}")
-        
-        return {
-            'status': 'success',
-            'message': 'Invoice processed successfully',
-            'invoice_data': invoice_data,
-            'output_path': output_path,
-            'output_filename': output_filename
-        }
+        try:
+            # Update the chart of accounts
+            safe_print(f"Updating chart of accounts...")
+            update_chart_of_accounts(
+                excel_path=chart_path,
+                invoice_data=invoice_data,
+                sheet_name=sheet_name
+            )
+            
+            # Copy the updated file to the output path
+            shutil.copy2(chart_path, temp_output)
+            
+            # Ensure the file is fully written and closed
+            if os.path.exists(temp_output):
+                # Move the file to the final location
+                shutil.move(temp_output, output_path)
+                safe_print(f"Chart of accounts updated and saved to {output_path}")
+                
+                return {
+                    'status': 'success',
+                    'message': 'Invoice processed successfully',
+                    'invoice_data': invoice_data,
+                    'output_path': output_path,
+                    'output_filename': output_filename
+                }
+            else:
+                raise Exception("Failed to create output file")
+                
+        except Exception as e:
+            # Clean up temporary file if it exists
+            if os.path.exists(temp_output):
+                try:
+                    os.remove(temp_output)
+                except:
+                    pass
+            raise  # Re-raise the exception to be caught by the outer try-except
         
     except Exception as e:
         error_trace = traceback.format_exc()

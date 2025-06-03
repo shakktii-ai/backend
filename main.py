@@ -193,6 +193,13 @@ def process_invoice():
         os.makedirs(processed_dir, exist_ok=True)
         
         # Process the invoice using perfect4 module
+        safe_print(f"\n=== Starting invoice processing ===")
+        safe_print(f"Invoice: {invoice_path}")
+        safe_print(f"Chart: {chart_path}")
+        safe_print(f"Sheet: {sheet_name}")
+        safe_print(f"Output dir: {processed_dir}")
+        safe_print(f"Unique ID: {unique_id}")
+        
         result = process_invoice_file(
             invoice_path=invoice_path,
             chart_path=chart_path,
@@ -201,12 +208,25 @@ def process_invoice():
             unique_id=unique_id
         )
         
+        # Log the result
+        safe_print("\n=== Processing Result ===")
+        safe_print(f"Status: {result.get('status')}")
+        safe_print(f"Message: {result.get('message')}")
+        
         # Ensure the output path is using the correct processed directory
         if 'output_path' in result:
             # Make sure the path is using the correct directory
             filename = os.path.basename(result['output_path'])
             result['output_path'] = os.path.join(processed_dir, filename)
             result['output_filename'] = filename
+            safe_print(f"Output file: {result['output_path']}")
+            
+            # Verify the file was created
+            if os.path.exists(result['output_path']):
+                file_size = os.path.getsize(result['output_path'])
+                safe_print(f"File created successfully. Size: {file_size} bytes")
+            else:
+                safe_print("WARNING: Output file not found after processing")
         
         # Add download link and file info to the response
         if 'status' in result and result['status'] == 'success':
@@ -222,14 +242,20 @@ def process_invoice():
                 },
                 'invoice_data': result.get('invoice_data', {})
             }
-            safe_print("Processing completed successfully")
+            safe_print("\n=== Processing completed successfully ===\n")
             return jsonify(response_data)
         else:
             # If there was an error, return the error details
+            error_msg = result.get('message', 'Failed to process invoice')
+            error_trace = result.get('trace', '')
+            safe_print(f"\n!!! PROCESSING FAILED: {error_msg}")
+            if error_trace:
+                safe_print(f"Error details:\n{error_trace}")
+                
             return jsonify({
                 'status': 'error',
-                'error': result.get('message', 'Failed to process invoice'),
-                'details': result.get('trace', '')
+                'error': error_msg,
+                'details': error_trace
             }), 500
         
     except Exception as e:
@@ -335,61 +361,86 @@ def download_file(filename):
         
         # If we still don't have a filename, return an error
         if not filename:
+            error_msg = "No filename provided. Use /api/download-file/<filename> or /api/download-file?filename=<filename>"
+            safe_print(f"Error: {error_msg}")
             return jsonify({
                 'status': 'error',
-                'error': "No filename provided. Use /api/download-file/<filename> or /api/download-file?filename=<filename>"
+                'error': error_msg
             }), 400
         
-        safe_print(f"Attempting to download file: {filename}")
+        safe_print(f"\n=== Download Request ===")
+        safe_print(f"Requested file: {filename}")
         
         # Ensure the filename is secure and doesn't contain path traversal
         filename = secure_filename(os.path.basename(filename))
+        safe_print(f"Sanitized filename: {filename}")
         
         # Define the base directory for downloads
         base_dir = app.config['PROCESSED_FOLDER']
+        safe_print(f"Base directory: {base_dir}")
         
         # Construct absolute path
         file_path = os.path.abspath(os.path.join(base_dir, filename))
+        safe_print(f"Full file path: {file_path}")
         
         # Security check: Ensure the file is within the allowed directory
-        if not file_path.startswith(os.path.abspath(base_dir)):
-            safe_print(f"Security alert: Attempted path traversal: {file_path}")
+        abs_base_dir = os.path.abspath(base_dir)
+        if not file_path.startswith(abs_base_dir):
+            error_msg = f"Security alert: Attempted path traversal: {file_path} (base: {abs_base_dir})"
+            safe_print(error_msg)
             return jsonify({
                 'status': 'error',
-                'error': 'Invalid file path'
+                'error': 'Invalid file path',
+                'details': error_msg
             }), 403
         
         # Check if file exists
         if not os.path.exists(file_path):
-            safe_print(f"File not found: {file_path}")
+            error_msg = f"File not found: {file_path}"
+            safe_print(error_msg)
+            
             # Try to list files in the directory for debugging
             try:
                 files = os.listdir(base_dir)
-                safe_print(f"Available files in {base_dir}: {files}")
+                safe_print(f"\nAvailable files in {base_dir}:")
+                for f in files:
+                    safe_print(f"- {f} (size: {os.path.getsize(os.path.join(base_dir, f))} bytes)")
             except Exception as e:
                 safe_print(f"Error listing directory {base_dir}: {str(e)}")
             
             return jsonify({
                 'status': 'error',
                 'error': f'File not found: {filename}',
-                'available_files': files if 'files' in locals() else []
+                'available_files': files if 'files' in locals() else [],
+                'directory': base_dir
             }), 404
             
+        # Get file stats for logging
+        file_size = os.path.getsize(file_path)
+        safe_print(f"File found. Size: {file_size} bytes")
+        
+        # Log the download attempt
         safe_print(f"Serving file: {file_path}")
-        return send_from_directory(
+        
+        # Send the file
+        response = send_from_directory(
             directory=os.path.dirname(file_path),
             path=os.path.basename(file_path),
             as_attachment=True,
             download_name=filename  # This sets the filename in the download dialog
         )
         
+        safe_print("File sent successfully")
+        return response
+        
     except Exception as e:
         error_msg = f"Error downloading file: {str(e)}"
-        safe_print(error_msg)
+        safe_print(f"\n!!! ERROR: {error_msg}")
         traceback.print_exc()
         return jsonify({
             'status': 'error',
-            'error': error_msg
+            'error': error_msg,
+            'trace': traceback.format_exc()
         }), 500
 
 # This is needed for running with Gunicorn on Render
