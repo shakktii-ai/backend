@@ -960,37 +960,49 @@ def process_invoice_file(invoice_path, chart_path, sheet_name, output_dir, uniqu
         # Extract invoice data
         safe_print("Extracting invoice data...")
         try:
-            invoice_data = extract_invoice_data(invoice_path)
-            safe_print("Invoice data extracted successfully")
+            invoice_text = extract_invoice_data(invoice_path)
+            safe_print("Raw invoice text extracted successfully")
         except Exception as e:
             safe_print(f"Error extracting invoice data: {str(e)}")
             raise
         
-        # For now, use placeholder data if extraction fails
-        if not invoice_data:
-            safe_print("Using placeholder invoice data")
+        # Analyze chart of accounts structure
+        safe_print("Analyzing chart of accounts structure...")
+        coa_sheet, structure = analyze_excel_structure(chart_path, sheet_name)
+        
+        # Classify invoice data using Claude AI
+        safe_print("Classifying invoice data with Claude AI...")
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY environment variable not set")
+        
+        try:
+            # Process the invoice text with Claude
+            invoice_data = classify_invoice_with_claude(
+                invoice_text=invoice_text,
+                coa_sheet=coa_sheet,
+                structure=structure,
+                api_key=api_key
+            )
+            safe_print(f"Classified invoice data: {json.dumps(invoice_data, indent=2)}")
+            
+        except Exception as e:
+            safe_print(f"Error classifying invoice with Claude: {str(e)}")
+            safe_print("Using fallback invoice data")
             invoice_data = {
                 'invoice_number': f'INV-{unique_id}',
                 'date': datetime.now().strftime('%Y-%m-%d'),
                 'amount': 1000.00,
                 'vendor': 'Sample Vendor',
                 'description': 'Sample invoice description',
-                'classification': 'Revenue'
+                'classification': 'Revenue',
+                'account_code': '4000',  # Default to Revenue account
+                'account_name': 'Sales Revenue',
+                'department': 'General',
+                'category': 'Income'
             }
         
         result['invoice_data'] = invoice_data
-        
-        # Analyze chart of accounts structure
-        safe_print("Analyzing chart of accounts structure...")
-        structure = analyze_excel_structure(chart_path, sheet_name)
-        
-        # Read the chart of accounts
-        coa_sheet = pd.read_excel(chart_path, sheet_name=sheet_name)
-        
-        # Convert datetime columns to strings for JSON serialization
-        for col in coa_sheet.columns:
-            if pd.api.types.is_datetime64_any_dtype(coa_sheet[col]):
-                coa_sheet[col] = coa_sheet[col].dt.strftime('%Y-%m-%d')
         
         # Create a temporary file for the updated chart
         temp_output = os.path.join(output_dir, f'temp_{unique_id}.xlsx')
@@ -1006,7 +1018,7 @@ def process_invoice_file(invoice_path, chart_path, sheet_name, output_dir, uniqu
             shutil.copy2(chart_path, working_chart_path)
             safe_print(f"Created working copy at: {working_chart_path}")
             
-            # Update the chart of accounts
+            # Update the chart of accounts with the classified data
             update_chart_of_accounts(
                 excel_path=working_chart_path,
                 invoice_data=invoice_data,
