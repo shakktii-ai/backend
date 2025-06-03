@@ -194,12 +194,28 @@ def process_invoice():
         
         # Process the invoice using perfect4 module
         safe_print(f"\n=== Starting invoice processing ===")
-        safe_print(f"Invoice: {invoice_path}")
-        safe_print(f"Chart: {chart_path}")
+        safe_print(f"Current working directory: {os.getcwd()}")
+        safe_print(f"Invoice path: {invoice_path} (exists: {os.path.exists(invoice_path)})")
+        safe_print(f"Chart path: {chart_path} (exists: {os.path.exists(chart_path)})")
         safe_print(f"Sheet: {sheet_name}")
-        safe_print(f"Output dir: {processed_dir}")
+        safe_print(f"Output dir: {processed_dir} (exists: {os.path.exists(processed_dir)})")
         safe_print(f"Unique ID: {unique_id}")
         
+        # List files in the upload directory for debugging
+        try:
+            upload_files = os.listdir(os.path.dirname(invoice_path))
+            safe_print(f"Files in upload directory: {upload_files}")
+        except Exception as e:
+            safe_print(f"Error listing upload directory: {str(e)}")
+        
+        # List files in the output directory before processing
+        try:
+            output_files_before = os.listdir(processed_dir)
+            safe_print(f"Files in output directory before processing: {output_files_before}")
+        except Exception as e:
+            safe_print(f"Error listing output directory: {str(e)}")
+        
+        safe_print("\nCalling process_invoice_file...")
         result = process_invoice_file(
             invoice_path=invoice_path,
             chart_path=chart_path,
@@ -207,6 +223,18 @@ def process_invoice():
             output_dir=processed_dir,
             unique_id=unique_id
         )
+        
+        # List files in the output directory after processing
+        try:
+            output_files_after = os.listdir(processed_dir)
+            safe_print(f"Files in output directory after processing: {output_files_after}")
+            new_files = list(set(output_files_after) - set(output_files_before))
+            if new_files:
+                safe_print(f"New files created: {new_files}")
+            else:
+                safe_print("No new files were created")
+        except Exception as e:
+            safe_print(f"Error listing output directory after processing: {str(e)}")
         
         # Log the result
         safe_print("\n=== Processing Result ===")
