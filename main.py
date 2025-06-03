@@ -126,24 +126,39 @@ def process_invoice():
         safe_print("Received request with form data:", request.form)
         safe_print("Received files:", request.files)
         
+        # Get files from request
+        invoice_file = request.files.get('invoiceFile')
+        chart_file = request.files.get('coaFile')
+        
+        safe_print(f"Invoice file: {invoice_file.filename if invoice_file else 'Not found'}")
+        safe_print(f"Chart file: {chart_file.filename if chart_file else 'Not found'}")
+        
         # Check if files are present in the request
-        if 'files' not in request.files:
-            return jsonify({'status': 'error', 'message': 'No files were uploaded'}), 400
-            
-        files = request.files.getlist('files')
-        safe_print(f"Found {len(files)} files in request")
-        
-        if len(files) < 2:
-            return jsonify({'status': 'error', 'message': 'Both invoice and chart files are required'}), 400
-        
-        # Find invoice and chart files
-        invoice_file = next((f for f in files if f.filename and f.filename.lower().endswith('.pdf')), None)
-        chart_file = next((f for f in files if f.filename and (f.filename.lower().endswith('.xlsx') or f.filename.lower().endswith('.xls'))), None)
-        
         if not invoice_file or not chart_file:
             return jsonify({
                 'status': 'error', 
-                'message': 'Please upload one PDF file (invoice) and one Excel file (chart of accounts)'
+                'message': 'Both invoice (PDF) and chart of accounts (Excel) files are required',
+                'received_files': {
+                    'invoice': bool(invoice_file),
+                    'chart': bool(chart_file)
+                }
+            }), 400
+            
+        # Validate file types
+        if not (invoice_file.filename and invoice_file.filename.lower().endswith('.pdf')):
+            return jsonify({
+                'status': 'error',
+                'message': 'Invoice file must be a PDF',
+                'received_file': invoice_file.filename
+            }), 400
+            
+        if not (chart_file.filename and (chart_file.filename.lower().endswith('.xlsx') or 
+                                       chart_file.filename.lower().endswith('.xls') or
+                                       chart_file.filename.lower().endswith('.xlsm'))):
+            return jsonify({
+                'status': 'error',
+                'message': 'Chart of accounts must be an Excel file (.xlsx, .xls, .xlsm)',
+                'received_file': chart_file.filename
             }), 400
             
         # Get sheet name from form data or use default
