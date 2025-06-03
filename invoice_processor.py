@@ -202,26 +202,10 @@ def classify_invoice_with_claude(invoice_text, coa_sheet, structure, api_key):
     # Get the structure analysis
     prompt = construct_prompt(coa_sheet, structure, invoice_text)
 
-    safe_print("\\nSending prompt to Claude API...")
+    safe_print("\nSending prompt to Claude API...")
     
-    # Set a system prompt specifically requesting JSON response
-    system_prompt = f"""
-    You are an AI accountant. Analyze this invoice and provide a complete financial classification.
-    The classification must include ALL columns from the Chart of Accounts, with proper formatting for each.
-
-    **Invoice Text:**
-    {invoice_text}
-
-    **Chart of Accounts sheet:**
-    {coa_sheet}
-
-    **Required Column Formats:**
-    {chr(10).join(format_requirements)}
-
-    **Example Rows from Chart of Accounts:**
-    {json.dumps(example_rows, indent=2)}
-
-    balance_sheet_structure = 
+    # Define the balance sheet structure template
+    balance_sheet_structure = """
     VERTICAL BALANCE SHEET FORMAT:
 
     I. EQUITY AND LIABILITIES
@@ -259,7 +243,49 @@ def classify_invoice_with_claude(invoice_text, coa_sheet, structure, api_key):
        d. Cash and Cash Equivalents
        e. Short-term Loans and Advances
        f. Other Current Assets
+    """
+    
+    # Get example rows from the COA sheet
+    example_rows = []
+    for _, row in coa_sheet.head(3).iterrows():
+        example_row = {}
+        for col in structure['columns']:
+            if col in row and pd.notna(row[col]):
+                example_row[col] = str(row[col])
+        if example_row:
+            example_rows.append(example_row)
+    
+    # Define format requirements based on column types
+    format_requirements = []
+    for col in structure['columns']:
+        if 'code' in col.lower() or 'number' in col.lower():
+            format_requirements.append(f"- {col}: Use consistent code format (e.g., '4000', '4100')")
+        elif 'amount' in col.lower() or 'value' in col.lower():
+            format_requirements.append(f"- {col}: Decimal number with 2 decimal places (e.g., '1000.00')")
+        elif 'date' in col.lower():
+            format_requirements.append(f"- {col}: YYYY-MM-DD format")
+        else:
+            format_requirements.append(f"- {col}: Text value")
+    
+    # Construct the final prompt
+    system_prompt = f"""
+    You are an AI accountant. Analyze this invoice and provide a complete financial classification.
+    The classification must include ALL columns from the Chart of Accounts, with proper formatting for each.
 
+    **Invoice Text:**
+    {invoice_text}
+
+    **Chart of Accounts sheet (first 10 rows):**
+    {coa_sheet.head(10).to_string()}
+
+    **Required Column Formats:**
+    {chr(10).join(format_requirements)}
+
+    **Example Rows from Chart of Accounts:**
+    {json.dumps(example_rows, indent=2)}
+
+    **Balance Sheet Structure:**
+    {balance_sheet_structure}
 
     **Special Instructions:**
     1. Analyze the example rows to understand the structure and patterns
@@ -273,75 +299,10 @@ def classify_invoice_with_claude(invoice_text, coa_sheet, structure, api_key):
     Provide the classification in JSON format with ALL columns from the example rows.
     """
     
-    # Call the Claude API
-    client = anthropic.Anthropic(api_key=api_key)
-    message = client.messages.create(
-        model="claude-3-opus-20240229",
-        max_tokens=4000,
-        temperature=0,
-        system=system_prompt,
-        messages=[
-            {"role": "user", "content": prompt}
-        ]
-    )
+    # Rest of your existing code for calling Claude API
+    # ...
     
-    response_text = message.content[0].text
-    
-    # Use our safe_print for Claude's response that might contain Unicode characters
-    try:
-        safe_print("\\nClaude Response (Preview): " + response_text[:100] + "...")
-    except:
-        safe_print("\\nClaude Response received but cannot be displayed due to encoding issues.")
-
-    try:
-        extracted_data = extract_first_json(response_text)
-        safe_print("\\nJSON successfully extracted.")
-        
-        # Check if extracted data is a list/array, and if so, use the first item
-        if isinstance(extracted_data, list) and len(extracted_data) > 0:
-            safe_print(f"Extracted data is an array with {len(extracted_data)} items. Using the first item.")
-            item_data = extracted_data[0]  # Use the first item in the list
-        else:
-            item_data = extracted_data
-            
-        # Ensure all required columns are present and properly formatted
-        final_data = {}
-        for col in structure['columns']:
-            # Get the value directly from extracted_data
-            value = item_data.get(col, "")
-            
-            # Apply formatting based on column type
-            if col in structure['patterns']:
-                pattern = structure['patterns'][col]
-                try:
-                    if pattern['type'] == '2-digit' and value:
-                        # Handle both integer and decimal values
-                        if '.' in str(value):
-                            value = f"{int(float(str(value))):02d}"
-                        else:
-                            value = f"{int(str(value)):02d}"
-                    elif pattern['type'] == '4-digit' and value:
-                        # Handle both integer and decimal values
-                        if '.' in str(value):
-                            value = f"{int(float(str(value))):04d}"
-                        else:
-                            value = f"{int(str(value)):04d}"
-                    elif pattern['type'] == 'decimal' and value:
-                        # Ensure decimal format
-                        value = f"{float(str(value)):.1f}"
-                except (ValueError, TypeError) as e:
-                    safe_print(f"Warning: Could not format value '{value}' for column '{col}': {str(e)}")
-                    # Keep original value if formatting fails
-                    pass
-            
-            # Store the value in final_data
-            final_data[col] = value
-        
-        safe_print("\\nFinal Data to be inserted: [Data prepared successfully]")
-        return final_data
-
-    except Exception as e:
-        raise ValueError(f"Error processing Claude's response: {str(e)}\\nRaw output:\\n{response_text}")
+    return classified_data
 
 def add_to_excel(excel_path, sheet_name, classified_data):
     """Add the classified data as a new row in the Excel file."""
