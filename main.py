@@ -2,241 +2,115 @@ from flask import Flask, jsonify, request, send_from_directory, current_app
 import os
 import sys
 import traceback
-import requests
-from datetime import datetime
 import uuid
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 import pandas as pd
-import numpy as np
-from openpyxl import Workbook, load_workbook
-from openpyxl.utils import get_column_letter
-from openpyxl.utils.dataframe import dataframe_to_rows
-import PyPDF2
-from anthropic import Anthropic
 import json
-import re
 from perfect4 import (
-    extract_invoice_data,
-    analyze_excel_structure,
-    classify_invoice_with_claude,
-    update_chart_of_accounts,
+    process_invoice_file,
+    get_excel_sheets,
     safe_print
 )
 
-# Initialize Anthropic client
-anthropic_client = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+# Initialize Flask app and configuration
+app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 
-# Helper function to analyze chart of accounts with Claude
-def analyze_coa_with_claude(coa_data):
-    try:
-        # Get example rows from the Excel sheet and convert to string format
-        example_rows = []
-        for _, row in coa_data.head(5).iterrows():
-            row_dict = {}
-            for col in coa_data.columns:
-                value = row[col]
-                if pd.isna(value):
-                    row_dict[col] = ""
-                elif isinstance(value, (pd.Timestamp, datetime)):
-                    row_dict[col] = value.strftime('%Y-%m-%d')
-                else:
-                    row_dict[col] = str(value)
-            example_rows.append(row_dict)
-
-        # Analyze patterns in code columns
-        code_patterns = {}
-        for col in coa_data.columns:
-            if 'code' in col.lower() or 'account' in col.lower():
-                patterns = coa_data[col].dropna().astype(str).unique().tolist()[:5]
-                if patterns:
-                    code_patterns[col] = patterns
-
-        # Analyze hierarchy and relationships
-        hierarchy = {}
-        relationships = {}
-        for col in coa_data.columns:
-            if 'group' in col.lower() or 'category' in col.lower():
-                values = coa_data[col].dropna().astype(str).unique().tolist()
-                if values:
-                    hierarchy[col] = values
-            if 'code' in col.lower() and any(ref in col.lower() for ref in ['ref', 'related', 'parent']):
-                related_cols = [c for c in coa_data.columns if c != col and 'name' in c.lower()]
-                if related_cols:
-                    relationships[col] = related_cols[0]
-
-        # Prepare the prompt for Claude
-        prompt = f"""You are an AI accountant. Analyze this chart of accounts and provide a complete financial classification structure.
-
-**Chart of Accounts Data:**
-{coa_data.to_string()}
-
-**Example Rows:**
-{json.dumps(example_rows, indent=2)}
-
-**Code Patterns Found:**
-{json.dumps(code_patterns, indent=2)}
-
-**Hierarchy Information:**
-{json.dumps(hierarchy, indent=2)}
-
-**Column Relationships:**
-{json.dumps(relationships, indent=2)}
-
-Please analyze and provide:
-1. The complete account hierarchy (main groups, sub groups, detail accounts)
-2. The account types and their purposes
-3. Specific patterns in account codes and their meanings
-4. Rules for invoice categorization based on:
-   - Account code structure
-   - Group hierarchies
-   - Naming conventions
-   - Common transaction types
-
-Provide your analysis in this JSON format:
-{{
-    "hierarchy": {{
-        "main_groups": [],
-        "sub_groups": {{}},
-        "detail_accounts": {{}}
-    }},
-    "account_types": {{
-        "asset": [],
-        "liability": [],
-        "equity": [],
-        "revenue": [],
-        "expense": []
-    }},
-    "code_patterns": {{
-        "structure": "",
-        "examples": {{}}
-    }},
-    "categorization_rules": [
-        {{
-            "pattern": "",
-            "account_type": "",
-            "description": ""
-        }}
-    ]
-}}"""
-
-        # Get Claude's analysis
-        message = anthropic.messages.create(
-            model="claude-3-opus-20240229",
-            max_tokens=4000,
-            temperature=0,
-            system="You are an expert accountant specializing in financial analysis and chart of accounts structure. Always provide detailed, structured analysis in the exact JSON format requested.",
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
-
-        # Extract JSON from response
-        match = re.search(r'```json\s*({[\s\S]*?})\s*```', message.content[0].text)
-        if not match:
-            raise ValueError("No JSON found in Claude's response")
-
-        analysis = json.loads(match.group(1))
-        return analysis
-
-    except Exception as e:
-        print(f"Error analyzing chart of accounts with Claude: {str(e)}")
-        return {"error": str(e)}
-
-# Load environment variables from .env file if it exists
+# Load environment variables
 load_dotenv()
 
-# Get base directory for file storage
+# Configure file upload settings
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Define folder paths
 UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER', os.path.join(BASE_DIR, 'uploads'))
 PROCESSED_FOLDER = os.environ.get('PROCESSED_FOLDER', os.path.join(BASE_DIR, 'processed'))
 TEMP_FOLDER = os.environ.get('TEMP_FOLDER', os.path.join(BASE_DIR, 'temp'))
 
-# Create required folders immediately
-for folder in [UPLOAD_FOLDER, TEMP_FOLDER, PROCESSED_FOLDER]:
+# Create required directories
+for folder in [UPLOAD_FOLDER, PROCESSED_FOLDER, TEMP_FOLDER]:
     os.makedirs(folder, exist_ok=True)
-    print(f"Created directory: {folder}")
+    safe_print(f"Created directory: {folder}")
 
-# Create the Flask application
-app = Flask(__name__)
-
-# Enable CORS for all routes and origins
-CORS(app)
-
-# Configure file upload settings
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['PROCESSED_FOLDER'] = PROCESSED_FOLDER
 app.config['TEMP_FOLDER'] = TEMP_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max upload
 
-# In Flask 2.3+, before_first_request is removed
-# Instead, we'll create a function that runs with the first request
-@app.before_request
-def initialize_app():
-    # Only run once using an app variable to track initialization
-    if not getattr(app, 'initialized', False):
-        app.initialized = True
-        # Any additional initialization can go here
-
+# Health check endpoint
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "message": "Flask API is running"
-    })
+        'status': 'healthy',
+        'timestamp': pd.Timestamp.now().isoformat(),
+        'directories': {
+            'uploads': app.config['UPLOAD_FOLDER'],
+            'processed': app.config['PROCESSED_FOLDER'],
+            'temp': app.config['TEMP_FOLDER']
+        }
+    }), 200
 
 @app.route('/', methods=['GET'])
 def index():
     return """
+    <!DOCTYPE html>
     <html>
-        <head>
-            <title>Invoice Processor API</title>
-            <style>
-                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-                h1 { color: #333; }
-                .endpoint { background: #f4f4f4; padding: 10px; margin: 10px 0; border-radius: 5px; }
-                code { background: #e4e4e4; padding: 2px 5px; border-radius: 3px; }
-            </style>
-        </head>
-        <body>
-            <h1>Invoice Processor API Documentation</h1>
-            <p>This API allows you to process invoices against a chart of accounts using Claude AI.</p>
-            
-            <h2>API Endpoints</h2>
-            
-            <div class="endpoint">
-                <h3>1. Health Check</h3>
-                <code>GET /api/health</code>
-                <p>Returns the API status and timestamp.</p>
-            </div>
-            
-            <div class="endpoint">
-                <h3>2. Process Invoice</h3>
-                <code>POST /api/process-invoice</code>
-                <p>Processes an invoice against a chart of accounts.</p>
-            </div>
-            
-            <div class="endpoint">
-                <h3>3. Get Excel Sheets</h3>
-                <code>POST /api/get-sheets</code>
-                <p>Returns the sheet names from an Excel file.</p>
-            </div>
-            
-            <div class="endpoint">
-                <h3>4. Download File</h3>
-                <code>GET /api/download-file/{filename}</code>
-                <p>Downloads a processed file.</p>
-            </div>
-        </body>
+    <head>
+        <title>Invoice Processing API</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+                line-height: 1.6;
+            }
+            .endpoint {
+                background: #f4f4f4;
+                padding: 15px;
+                margin: 10px 0;
+                border-radius: 5px;
+            }
+            code {
+                background: #e4e4e4;
+                padding: 2px 5px;
+                border-radius: 3px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Invoice Processing API</h1>
+        <p>Welcome to the Invoice Processing API. Use the following endpoints:</p>
+        
+        <div class="endpoint">
+            <h3>Health Check</h3>
+            <p><code>GET /api/health</code> - Check if the API is running</p>
+        </div>
+        
+        <div class="endpoint">
+            <h3>Process Invoice</h3>
+            <p><code>POST /api/process-invoice</code> - Process an invoice and update chart of accounts</p>
+            <p>Parameters (multipart/form-data):</p>
+            <ul>
+                <li><code>invoice</code> - The invoice PDF file</li>
+                <li><code>chart</code> - The chart of accounts Excel file</li>
+                <li><code>sheet_name</code> - (Optional) Sheet name in the Excel file (default: 'COA i-Kcal')</li>
+            </ul>
+        </div>
+        
+        <div class="endpoint">
+            <h3>Get Excel Sheets</h3>
+            <p><code>GET /api/get-sheets?file_path=path/to/file.xlsx</code> - List all sheets in an Excel file</p>
+        </div>
+        
+        <div class="endpoint">
+            <h3>Download File</h3>
+            <p><code>GET /api/download-file/&lt;filename&gt;</code> - Download a processed file</p>
+        </div>
+    </body>
     </html>
     """
 
-# This is what Render.com needs - app must be importable from this file
-application = app
 
 # Route to handle file uploads and process invoices
 @app.route('/api/process-invoice', methods=['POST'])
@@ -246,221 +120,141 @@ def process_invoice():
     chart_path = None
     
     try:
-        # Debug log request data
-        print("\n=== New Request ===")
-        print("Request headers:", request.headers)
-        print("Request form data:", request.form)
-        print("Request files:", request.files)
-        print("Content type:", request.content_type)
+        # Check if files are present in the request
+        if 'invoice' not in request.files or 'chart' not in request.files:
+            return jsonify({'error': 'Both invoice and chart files are required'}), 400
+            
+        # Get files from request
+        invoice_file = request.files['invoice']
+        chart_file = request.files['chart']
         
-        # Generate unique ID for this request
-        unique_id = str(uuid.uuid4())
-        sheet_name = request.form.get('sheetName', '')
+        # Get sheet name from form data or use default
+        sheet_name = request.form.get('sheet_name', 'COA i-Kcal')
         
-        # Check if we have file uploads
-        if 'invoiceFile' in request.files and 'coaFile' in request.files:
-            # Handle file uploads
-            invoice_file = request.files['invoiceFile']
-            chart_file = request.files['coaFile']
-            
-            if invoice_file.filename == '' or chart_file.filename == '':
-                return jsonify({'error': 'No file selected'}), 400
-                
-            # Secure the filenames
-            invoice_filename = secure_filename(invoice_file.filename)
-            chart_filename = secure_filename(chart_file.filename)
-            
-            # Create file paths
-            invoice_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{unique_id}_{invoice_filename}")
-            chart_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{unique_id}_{chart_filename}")
-            
-            # Create upload directory if it doesn't exist
-            os.makedirs(os.path.dirname(invoice_path), exist_ok=True)
-            
-            # Save the uploaded files
-            invoice_file.save(invoice_path)
-            chart_file.save(chart_path)
-            
-            print(f"Saved uploaded files - Invoice: {invoice_path}, COA: {chart_path}")
-            
-        else:
-            return jsonify({
-                'error': 'Both invoice and chart of accounts files are required',
-                'hint': 'Please upload files using multipart/form-data',
-                'available_fields': list(request.files.keys())
-            }), 400
-            
-        # Process the files using perfect4.py logic
-        result = process_files(invoice_path, chart_path, sheet_name, unique_id)
+        # Generate unique ID for this processing job
+        unique_id = str(uuid.uuid4())[:8]
         
-        if result.get('status') == 'success':
-            return jsonify({
-                'status': 'success',
-                'message': 'Invoice and chart of accounts processed successfully',
-                'file_info': {
-                    'path': result['output_path'],
-                    'filename': result['filename'],
-                    'download_url': f'/api/download-file?filename={result["filename"]}',
-                    'file_type': 'excel'
-                }
-            })
-        else:
-            raise Exception(result.get('message', 'Failed to process invoice'))
-            
+        # Ensure upload folder exists
+        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+        
+        # Save uploaded files with secure filenames
+        invoice_filename = f'invoice_{unique_id}.pdf'
+        chart_filename = f'chart_{unique_id}.xlsx'
+        
+        invoice_path = os.path.join(app.config['UPLOAD_FOLDER'], invoice_filename)
+        chart_path = os.path.join(app.config['UPLOAD_FOLDER'], chart_filename)
+        
+        # Save files
+        invoice_file.save(invoice_path)
+        chart_file.save(chart_path)
+        
+        # Process the files using the function from perfect4.py
+        result = process_invoice_file(
+            invoice_path=invoice_path,
+            chart_path=chart_path,
+            sheet_name=sheet_name,
+            output_dir=app.config['PROCESSED_FOLDER'],
+            unique_id=unique_id
+        )
+        
+        # Add download link to the response
+        if 'status' in result and result['status'] == 'success':
+            result['download_link'] = f'/api/download-file/{os.path.basename(result["output_path"])}'
+        
+        return jsonify(result)
+        
     except Exception as e:
-        error_msg = f"Error processing request: {str(e)}"
-        print(error_msg)
-        traceback.print_exc()
-        return jsonify({'error': error_msg}), 500
+        error_trace = traceback.format_exc()
+        safe_print(f"Error in process_invoice: {str(e)}\n{error_trace}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'trace': error_trace
+        }), 500
         
     finally:
-        # Clean up uploaded files in all cases
-        if invoice_path and os.path.exists(invoice_path):
-            try:
-                os.remove(invoice_path)
-            except Exception as e:
-                print(f"Error cleaning up invoice file: {str(e)}")
-        if chart_path and os.path.exists(chart_path):
-            try:
-                os.remove(chart_path)
-            except Exception as e:
-                print(f"Error cleaning up chart file: {str(e)}")
+        # Clean up uploaded files
+        for file_path in [invoice_path, chart_path]:
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    safe_print(f"Error removing file {file_path}: {str(e)}")
 
-# Function to process the files using the perfect4.py logic
-def process_files(invoice_path, chart_path, sheet_name, unique_id):
-    try:
-        # 1. Extract text from the invoice PDF
-        invoice_text = extract_invoice_data(invoice_path)
-        if not invoice_text:
-            raise ValueError("Could not extract text from invoice PDF")
-
-        # 2. Analyze the Chart of Accounts Excel structure and get the sheet data
-        coa_sheet, excel_structure = analyze_excel_structure(chart_path, sheet_name)
-        if not excel_structure or not coa_sheet:
-            raise ValueError("Could not analyze Chart of Accounts structure")
-            
-        # Ensure excel_structure has all required keys
-        if 'patterns' not in excel_structure:
-            excel_structure['patterns'] = {}
-        if 'hierarchy' not in excel_structure:
-            excel_structure['hierarchy'] = {}
-        if 'relationships' not in excel_structure:
-            excel_structure['relationships'] = {}
-            
-        # Add data types if not present
-        if 'data_types' not in excel_structure:
-            excel_structure['data_types'] = {col: str(coa_sheet[col].dtype) for col in coa_sheet.columns}
-        
-        # 4. Use Claude to classify invoice and match to Chart of Accounts
-        api_key = os.getenv('ANTHROPIC_API_KEY')
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY not found in environment variables")
-            
-        print(f"Excel structure: {excel_structure}")
-        print(f"Columns in COA sheet: {list(coa_sheet.columns)}")
-            
-        invoice_data = classify_invoice_with_claude(invoice_text, coa_sheet, excel_structure, api_key)
-        if not invoice_data or 'error' in invoice_data:
-            raise ValueError(f"Claude classification failed: {invoice_data.get('error', 'Unknown error')}")
-
-        # 5. Create the output Excel file with multiple sheets
-        output_filename = f"{unique_id}_processed_results.xlsx"
-        output_path = os.path.join(app.config['PROCESSED_FOLDER'], output_filename)
-
-        # Create a new workbook
-        wb = Workbook()
-
-        # Sheet 1: Request Info
-        ws1 = wb.active
-        ws1.title = "Request Info"
-        request_info = [
-            ["Timestamp", datetime.now().isoformat()],
-            ["Invoice File", os.path.basename(invoice_path)],
-            ["Chart of Accounts File", os.path.basename(chart_path)],
-            ["Sheet Name", sheet_name],
-            ["Processing ID", unique_id]
-        ]
-        for row in request_info:
-            ws1.append(row)
-
-        # Sheet 2: Chart of Accounts Data
-        ws2 = wb.create_sheet("Chart of Accounts")
-        for r_idx, row in enumerate(dataframe_to_rows(coa_sheet, index=False, header=True)):
-            ws2.append(row)
-
-        # Sheet 3: Processed Invoice Data
-        ws3 = wb.create_sheet("Processed Invoice")
-        headers = ["Date", "Description", "Amount", "Account Code", "Account Name", "Classification"]
-        ws3.append(headers)
-
-        # Add the processed invoice data
-        for entry in invoice_data.get('entries', []):
-            row = [
-                entry.get('date', ''),
-                entry.get('description', ''),
-                entry.get('amount', ''),
-                entry.get('account_code', ''),
-                entry.get('account_name', ''),
-                entry.get('classification', '')
-            ]
-            ws3.append(row)
-
-        # Save the workbook
-        wb.save(output_path)
-
-        return {
-            'status': 'success',
-            'message': 'Invoice processed successfully',
-            'output_path': output_path,
-            'filename': output_filename
-        }
-
-    except Exception as e:
-        print(f"Error processing files: {str(e)}")
-        traceback.print_exc()
-        return {
-            'status': 'error',
-            'message': str(e)
-        }
-
-
-
-# Route to get Excel sheet names - simplified version for initial deployment
-@app.route('/api/get-sheets', methods=['POST'])
+# Route to get sheet names from an Excel file
+@app.route('/api/get-sheets', methods=['GET', 'POST'])
 def get_excel_sheets():
     try:
-        if 'file' not in request.files:
-            return jsonify({'error': 'No file provided'}), 400
+        if request.method == 'GET':
+            # Handle GET request with file_path parameter
+            file_path = request.args.get('file_path')
+            if not file_path:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'File path is required as a query parameter: /api/get-sheets?file_path=path/to/file.xlsx'
+                }), 400
             
-        file = request.files['file']
-        
-        if file.filename == '':
-            return jsonify({'error': 'No file selected'}), 400
+            # Ensure the file exists
+            if not os.path.exists(file_path):
+                return jsonify({
+                    'status': 'error',
+                    'message': f'File not found: {file_path}'
+                }), 404
             
-        if not file.filename.endswith(('.xls', '.xlsx')):
-            return jsonify({'error': 'File must be an Excel file (.xls or .xlsx)'}), 400
+            # Get sheet names using the function from perfect4.py
+            sheet_names = get_excel_sheets(file_path)
             
-        # For initial deployment, return dummy sheet names
-        # This will be replaced with actual Excel parsing later
-        dummy_sheet_names = ['Sheet1', 'Sheet2', 'Data']
-        
-        return jsonify({
-            'status': 'success',
-            'message': 'Full Excel parsing will be implemented in a future update',
-            'sheet_names': dummy_sheet_names
-        })
-        
+            return jsonify({
+                'status': 'success',
+                'file_path': file_path,
+                'sheets': sheet_names
+            })
+            
+        elif request.method == 'POST':
+            # Handle file upload
+            if 'file' not in request.files:
+                return jsonify({'status': 'error', 'message': 'No file provided'}), 400
+                
+            file = request.files['file']
+            
+            if file.filename == '':
+                return jsonify({'status': 'error', 'message': 'No file selected'}), 400
+                
+            if not file.filename.endswith(('.xls', '.xlsx')):
+                return jsonify({'status': 'error', 'message': 'File must be an Excel file (.xls or .xlsx)'}), 400
+            
+            # Save the file temporarily
+            temp_path = os.path.join(app.config['TEMP_FOLDER'], secure_filename(file.filename))
+            file.save(temp_path)
+            
+            try:
+                # Get sheet names using the function from perfect4.py
+                sheet_names = get_excel_sheets(temp_path)
+                
+                return jsonify({
+                    'status': 'success',
+                    'filename': file.filename,
+                    'sheets': sheet_names
+                })
+            finally:
+                # Clean up the temporary file
+                try:
+                    os.remove(temp_path)
+                except Exception as e:
+                    safe_print(f"Error removing temporary file: {str(e)}")
+    
     except Exception as e:
-        print(f"Error getting Excel sheets: {str(e)}")
-        traceback.print_exc()
+        error_trace = traceback.format_exc()
+        safe_print(f"Error in get_excel_sheets: {str(e)}\n{error_trace}")
         return jsonify({
-            'error': f"An error occurred: {str(e)}"
+            'status': 'error',
+            'message': str(e),
+            'trace': error_trace
         }), 500
 
-# Route to download processed files - supports both path and query parameters
-@app.route('/api/download-file', methods=['GET'])
+# Route to download processed files
 @app.route('/api/download-file/<path:filename>', methods=['GET'])
-def download_file(filename=None):
+def download_file(filename):
     try:
         # Check if filename is provided as query parameter (priority)
         query_filename = request.args.get('filename')
@@ -496,6 +290,9 @@ def download_file(filename=None):
         return jsonify({
             'error': f"File not found or error downloading: {str(e)}"
         }), 404
+
+# This is needed for running with Gunicorn on Render
+application = app
 
 if __name__ == '__main__':
     # Get port from environment variable or use default 10000
