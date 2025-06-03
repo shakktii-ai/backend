@@ -122,19 +122,37 @@ def process_invoice():
     chart_path = None
     
     try:
-        # Check if files are present in the request
-        if 'invoice' not in request.files or 'chart' not in request.files:
-            return jsonify({'error': 'Both invoice and chart files are required'}), 400
-            
-        # Get files from request
-        invoice_file = request.files['invoice']
-        chart_file = request.files['chart']
+        # Debug: Log request data
+        safe_print("Received request with form data:", request.form)
+        safe_print("Received files:", request.files)
         
+        # Check if files are present in the request
+        if 'files' not in request.files:
+            return jsonify({'status': 'error', 'message': 'No files were uploaded'}), 400
+            
+        files = request.files.getlist('files')
+        safe_print(f"Found {len(files)} files in request")
+        
+        if len(files) < 2:
+            return jsonify({'status': 'error', 'message': 'Both invoice and chart files are required'}), 400
+        
+        # Find invoice and chart files
+        invoice_file = next((f for f in files if f.filename and f.filename.lower().endswith('.pdf')), None)
+        chart_file = next((f for f in files if f.filename and (f.filename.lower().endswith('.xlsx') or f.filename.lower().endswith('.xls'))), None)
+        
+        if not invoice_file or not chart_file:
+            return jsonify({
+                'status': 'error', 
+                'message': 'Please upload one PDF file (invoice) and one Excel file (chart of accounts)'
+            }), 400
+            
         # Get sheet name from form data or use default
-        sheet_name = request.form.get('sheet_name', 'COA i-Kcal')
+        sheet_name = request.form.get('sheetName', 'COA i-Kcal')
+        safe_print(f"Using sheet name: {sheet_name}")
         
         # Generate unique ID for this processing job
         unique_id = str(uuid.uuid4())[:8]
+        safe_print(f"Generated unique ID: {unique_id}")
         
         # Ensure upload folder exists
         os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -146,9 +164,14 @@ def process_invoice():
         invoice_path = os.path.join(app.config['UPLOAD_FOLDER'], invoice_filename)
         chart_path = os.path.join(app.config['UPLOAD_FOLDER'], chart_filename)
         
+        safe_print(f"Saving invoice to: {invoice_path}")
+        safe_print(f"Saving chart to: {chart_path}")
+        
         # Save files
         invoice_file.save(invoice_path)
         chart_file.save(chart_path)
+        
+        safe_print("Files saved successfully. Starting processing...")
         
         # Process the files using the function from perfect4.py
         result = process_invoice_file(
@@ -163,6 +186,7 @@ def process_invoice():
         if 'status' in result and result['status'] == 'success':
             result['download_link'] = f'/api/download-file/{os.path.basename(result["output_path"])}'
         
+        safe_print("Processing completed successfully")
         return jsonify(result)
         
     except Exception as e:
